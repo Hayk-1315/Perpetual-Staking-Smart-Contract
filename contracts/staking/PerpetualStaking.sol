@@ -105,14 +105,17 @@ contract PerpetualStaking is OwnableUpgradeable {
     // =====================================================================
 
     modifier whenDepositable() {
+        '_'.
         // TODO: Implement modifier
     }
 
     modifier whenClaimable() {
+        '_'.
         // TODO: Implement modifier
     }
 
     modifier whenCompoundable() {
+        '_'.
         // TODO: Implement modifier
     }
 

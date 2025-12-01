@@ -1,0 +1,17 @@
+[profile.default]
+# Carpeta donde vive el código de los contratos
+src = 'contracts'
+# Carpeta donde viven los tests de Foundry
+test = 'test'
+# Carpeta donde irán las librerías externas (forge-std, OpenZeppelin, etc.)
+libs = ['lib']
+
+# Remappings para que los imports funcionen
+remappings = [
+  'forge-std=lib/forge-std/src/',
+  '@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/',
+  '@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/'
+]
+
+# Dejamos que Foundry detecte el compilador automáticamente
+auto_detect_solc = true
