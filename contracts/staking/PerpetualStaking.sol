@@ -274,45 +274,74 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @dev Must be called with strictly increasing `startTime` values
     /// @param yieldRatePerYear APY in 1e18 scale (e.g., 15% => 15e16)
     /// @param startTime UNIX timestamp strictly greater than now
-    function addYieldChange(
+        function addYieldChange(
         uint256 yieldRatePerYear,
         uint256 startTime
     ) external onlyOwner {
-        // TODO: Add yield rate to schedule
-        // HINTS:
-        // 1. Validate startTime >= block.timestamp (InvalidStartTime)
-        // 2. Calculate ratePerSecond = yieldRatePerYear / SECONDS_IN_A_YEAR
-        // 3. Get current schedule length
-        // 4. If length > 0, get last start time and verify startTime > lastStart (StartTimeMustIncrease)
-        // 5. Set in yieldSchedule map: yieldSchedule.set(startTime, ratePerSecond)
-        // 6. Emit YieldRateAdded event
+        // Validate that the start time is not in the past
+        if (startTime < block.timestamp) {
+            revert InvalidStartTime();
+        }
+
+        // Convert yearly yield to per-second yield
+        uint256 ratePerSecond = yieldRatePerYear / SECONDS_IN_A_YEAR;
+
+        // Enforce strictly increasing start times in the schedule
+        uint256 length = yieldSchedule.length();
+        if (length > 0) {
+            (uint256 lastStartTime, ) = yieldSchedule.at(length - 1);
+            if (startTime <= lastStartTime) {
+                revert StartTimeMustIncrease();
+            }
+        }
+
+        // Store the new yield rate in the schedule
+        yieldSchedule.set(startTime, ratePerSecond);
+
+        // Emit event using the yearly rate for easier off-chain readability
+        emit YieldRateAdded(yieldRatePerYear, startTime, block.timestamp);
     }
 
     /// @notice Remove a yield change at an exact `startTime`
     /// @param startTime Timestamp of yield change to remove
-    function removeYieldChange(uint256 startTime) external onlyOwner {
-        // TODO: Remove yield rate from schedule
-        // HINTS:
-        // 1. Call yieldSchedule.remove(startTime)
-        // 2. Emit YieldRateRemoved event
+       function removeYieldChange(uint256 startTime) external onlyOwner {
+        // Remove the yield change entry for the given start time
+        yieldSchedule.remove(startTime);
+
+        // Emit event so off-chain systems can track the removal
+        emit YieldRateRemoved(startTime, block.timestamp);
     }
+
 
     /// @notice Get current active yield rate and its start time
     /// @return currentYieldRate Current yield rate per second
     /// @return currentStartTime Start time of current yield rate
-    function getCurrentYieldRate()
+        function getCurrentYieldRate()
         public
         view
         returns (uint256 currentYieldRate, uint256 currentStartTime)
     {
-        // TODO: Find the latest active yield rate
-        // HINTS:
-        // 1. Initialize currentYieldRate to yieldPerSecond
-        // 2. Initialize currentStartTime to 0
-        // 3. Loop through yieldSchedule
-        // 4. For each entry, if timestamp > block.timestamp, break
-        // 5. Otherwise, update currentYieldRate and currentStartTime
-        // 6. Return the values
+        // Start with the base yield rate
+        currentYieldRate = yieldPerSecond;
+        currentStartTime = 0;
+
+        uint256 length = yieldSchedule.length();
+        for (uint256 i = 0; i < length; ) {
+            (uint256 startTime, uint256 ratePerSecond) = yieldSchedule.at(i);
+
+            // If this entry starts in the future, stop iterating
+            if (startTime > block.timestamp) {
+                break;
+            }
+
+            // Otherwise, this is the latest active rate so far
+            currentYieldRate = ratePerSecond;
+            currentStartTime = startTime;
+
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     // =====================================================================
@@ -437,22 +466,43 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @dev Computes C(t) = ∫y(s)ds from s=0 to s=t, with piecewise y(s)
     /// @param targetTimestamp Target timestamp
     /// @return cumulativeYield Cumulative yield (1e18 * seconds)
-    function _cumulativeYield(
+        function _cumulativeYield(
         uint256 targetTimestamp
     ) private view returns (uint256 cumulativeYield) {
-        // TODO: Calculate cumulative yield at targetTimestamp
-        // HINTS:
-        // 1. Get schedule length n = yieldSchedule.length()
-        // 2. If n == 0, return yieldPerSecond * targetTimestamp
-        // 3. Initialize prevStart = 0, prevRate = yieldPerSecond, cumulativeYield = 0
-        // 4. Loop through schedule:
-        //    a. Get (startTime, rate) from yieldSchedule.at(i)
-        //    b. If targetTimestamp <= startTime:
-        //       - Add prevRate * (targetTimestamp - prevStart) to cumulativeYield
-        //       - Return cumulativeYield
-        //    c. Add prevRate * (startTime - prevStart) to cumulativeYield
-        //    d. Update prevStart = startTime, prevRate = rate
-        // 5. After loop, add prevRate * (targetTimestamp - prevStart) to cumulativeYield
-        // 6. Return cumulativeYield
+        uint256 n = yieldSchedule.length();
+
+        // If there is no schedule, use the base per-second yield for the whole period
+        if (n == 0) {
+            return yieldPerSecond * targetTimestamp;
+        }
+
+        uint256 prevStart = 0;
+        uint256 prevRate = yieldPerSecond;
+        cumulativeYield = 0;
+
+        for (uint256 i = 0; i < n; ) {
+            (uint256 startTime, uint256 ratePerSecond) = yieldSchedule.at(i);
+
+            // If the target time falls before this change, integrate up to target and return
+            if (targetTimestamp <= startTime) {
+                cumulativeYield += prevRate * (targetTimestamp - prevStart);
+                return cumulativeYield;
+            }
+
+            // Integrate from the previous start up to this change
+            cumulativeYield += prevRate * (startTime - prevStart);
+
+            // Move to the next interval
+            prevStart = startTime;
+            prevRate = ratePerSecond;
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        // After processing all changes, integrate from the last change to the target time
+        cumulativeYield += prevRate * (targetTimestamp - prevStart);
     }
+
 }
