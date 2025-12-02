@@ -77,12 +77,34 @@ contract PerpetualStaking is OwnableUpgradeable {
     // EVENTS
     // =====================================================================
 
-    // TODO: Add events for:
-    // - Deposited (user, amount, timestamp)
-    // - Claimed (user, principal, interest, timestamp)
-    // - Compounded (user, newPrincipal, interest, timestamp)
-    // - YieldRateAdded (yieldRate, startTime, timestamp)
-    // - YieldRateRemoved (startTime, timestamp)
+    /// @notice Emitted when a user makes an initial deposit
+    event Deposited(address indexed user, uint256 amount, uint256 timestamp);
+
+    /// @notice Emitted when a user claims principal + interest
+    event Claimed(
+        address indexed user,
+        uint256 principal,
+        uint256 interest,
+        uint256 timestamp
+    );
+
+    /// @notice Emitted when a user compounds interest (and optionally adds more principal)
+    event Compounded(
+        address indexed user,
+        uint256 newPrincipal,
+        uint256 interest,
+        uint256 timestamp
+    );
+
+    /// @notice Emitted when a new yield rate is added to the schedule (APY in 1e18 scale)
+    event YieldRateAdded(
+        uint256 yieldRate,
+        uint256 startTime,
+        uint256 timestamp
+    );
+
+    /// @notice Emitted when a yield change is removed from the schedule
+    event YieldRateRemoved(uint256 startTime, uint256 timestamp);
 
     // =====================================================================
     // ERRORS
@@ -104,49 +126,73 @@ contract PerpetualStaking is OwnableUpgradeable {
     // MODIFIERS
     // =====================================================================
 
+    /// @dev Reverts if deposits are currently disabled
     modifier whenDepositable() {
-        // TODO: Implement modifier
+        if (!isDepositable) {
+            revert DepositsAreClosed();
+        }
+        _;
     }
 
+    /// @dev Reverts if claims are currently disabled
     modifier whenClaimable() {
-        // TODO: Implement modifier
+        if (!isClaimable) {
+            revert ClaimsAreClosed();
+        }
+        _;
     }
 
+    /// @dev Reverts if compound operations are currently disabled
     modifier whenCompoundable() {
-        // TODO: Implement modifier
+        if (!isCompoundable) {
+            revert CompoundIsClosed();
+        }
+        _;
     }
 
     // =====================================================================
     // INITIALIZATION
     // =====================================================================
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
+        /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
-        // TODO: Disable initializers
+        // Disable all initializers on the implementation contract
+        _disableInitializers();
     }
+
 
     /// @notice Initialize the staking contract
     /// @param _BKN Address of BKN token
     /// @param _owner Address of owner
-    function initialize(address _BKN, address _owner) external initializer {
-        // TODO: Implement initialization
-        // HINTS:
-        // 1. Set BKNToken to _BKN
-        // 2. Call __Ownable_init_unchained()
-        // 3. Call __Context_init_unchained()
-        // 4. Transfer ownership to _owner
-        // 5. Set isClaimable, isDepositable, isCompoundable to true
-        // 6. Set yieldPerYear to 150000000000000000 (15%)
-        // 7. Calculate yieldPerSecond = yieldPerYear / SECONDS_IN_A_YEAR
+        function initialize(address _BKN, address _owner) external initializer {
+        // Set staking token
+        BKNToken = IERC20Upgradeable(_BKN);
+
+        // Initialize Ownable context and set initial owner to msg.sender
+        __Ownable_init();
+
+        // Transfer ownership to the desired owner address
+        transferOwnership(_owner);
+
+        // Enable all user operations by default
+        isDepositable = true;
+        isClaimable = true;
+        isCompoundable = true;
+
+        // Set initial yield configuration (15% APY)
+        yieldPerYear = 150000000000000000; // 15e16
+        yieldPerSecond = yieldPerYear / SECONDS_IN_A_YEAR;
     }
+
 
     /// @notice Reinitialize for version 2
     /// @param _BKN Address of BKN token
-    function reinitialize(address _BKN) external reinitializer(2) {
-        // TODO: Implement reinitialization
-        // HINTS:
-        // 1. Set BKNToken to _BKN
-        // 2. Set sumDepositsTimesCumulativeYield to yieldUpToDeposit
+        function reinitialize(address _BKN) external reinitializer(2) {
+        // Update the staking token implementation
+        BKNToken = IERC20Upgradeable(_BKN);
+
+        // Align solvency tracking with the previously stored value
+        sumDepositsTimesCumulativeYield = yieldUpToDeposit;
     }
 
     receive() external payable {
