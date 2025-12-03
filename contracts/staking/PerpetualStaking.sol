@@ -352,16 +352,34 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @param user Address of user depositing
     /// @param amount Amount to deposit
     function deposit(address user, uint256 amount) external whenDepositable {
-        // TODO: Implement deposit logic
-        // HINTS:
-        // 1. Check user hasn't already deposited (AlreadyDeposited error)
-        // 2. Transfer amount from user to contract using safeTransferFrom
-        // 3. Get current timestamp as t0
-        // 4. Create UserStake struct with amount and t0
-        // 5. Update totalDeposited: totalDeposited += amount
-        // 6. Calculate C(t0) using _cumulativeYield(t0)
-        // 7. Update B: sumDepositsTimesCumulativeYield += amount * Ct0
-        // 8. Emit Deposited event
+        // Ensure the user does not already have an active stake
+        if (userStakes[user].amountDeposited > 0) {
+            revert AlreadyDeposited(user);
+        }
+
+        // Pull tokens from the user into this contract
+        BKNToken.safeTransferFrom(user, address(this), amount);
+
+        // Use current block time as the deposit timestamp
+        uint256 t0 = block.timestamp;
+
+        // Record the user's stake
+        userStakes[user] = UserStake({
+            amountDeposited: amount,
+            latestDepositTimestamp: t0
+        });
+
+        // Update total principal deposited (A)
+        totalDeposited += amount;
+
+        // Compute cumulative yield at deposit time C(t0)
+        uint256 Ct0 = _cumulativeYield(t0);
+
+        // Update B = Σ d_i * C(t0_i)
+        sumDepositsTimesCumulativeYield += amount * Ct0;
+
+        // Emit deposit event for off-chain tracking
+        emit Deposited(user, amount, t0);
     }
 
     // =====================================================================
