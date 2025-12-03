@@ -393,23 +393,56 @@ contract PerpetualStaking is OwnableUpgradeable {
         address user,
         uint256 amount
     ) external whenCompoundable {
-        // TODO: Implement compound logic
-        // HINTS:
-        // 1. Get principal from userStakes[user].amountDeposited
-        // 2. If both principal and amount are 0, revert NotEnoughToDeposit
-        // 3. If amount > 0, check isDepositable and transfer amount from user
-        // 4. Calculate Cnow = _cumulativeYield(block.timestamp)
-        // 5. If principal > 0:
-        //    a. Get t0 from userStakes[user].latestDepositTimestamp
-        //    b. Calculate Ct0 = _cumulativeYield(t0)
-        //    c. Calculate interest = Math.mulDiv(principal, (Cnow - Ct0), ONE)
-        //    d. Update totalDeposited -= principal
-        //    e. Update B: sumDepositsTimesCumulativeYield -= principal * Ct0
-        // 6. Calculate newPrincipal = principal + interest + amount
-        // 7. Update userStakes with newPrincipal and block.timestamp
-        // 8. Update totalDeposited += newPrincipal
-        // 9. Update B: sumDepositsTimesCumulativeYield += newPrincipal * Cnow
-        // 10. Emit Compounded event
+        // Load current principal for the user
+        uint256 principal = userStakes[user].amountDeposited;
+
+        // If there is no existing stake and no additional amount, nothing to do
+        if (principal == 0 && amount == 0) {
+            revert NotEnoughToDeposit();
+        }
+
+        // If the user wants to add more principal, ensure deposits are allowed and pull tokens
+        if (amount > 0) {
+            if (!isDepositable) {
+                revert DepositsAreClosed();
+            }
+            BKNToken.safeTransferFrom(user, address(this), amount);
+        }
+
+        // Compute cumulative yield at current time
+        uint256 Cnow = _cumulativeYield(block.timestamp);
+
+        uint256 interest = 0;
+
+        if (principal > 0) {
+            // If there is an existing stake, close the old position first
+            uint256 t0 = userStakes[user].latestDepositTimestamp;
+            uint256 Ct0 = _cumulativeYield(t0);
+
+            // Simple interest on the existing principal between t0 and now
+            uint256 deltaC = Cnow - Ct0;
+            interest = Math.mulDiv(principal, deltaC, ONE);
+
+            // Remove the old principal from the global aggregates
+            totalDeposited -= principal;
+            sumDepositsTimesCumulativeYield -= principal * Ct0;
+        }
+
+        // New principal after compounding interest and adding extra amount
+        uint256 newPrincipal = principal + interest + amount;
+
+        // Update user stake with the new principal and current timestamp
+        userStakes[user] = UserStake({
+            amountDeposited: newPrincipal,
+            latestDepositTimestamp: block.timestamp
+        });
+
+        // Add the new principal to the global aggregates
+        totalDeposited += newPrincipal;
+        sumDepositsTimesCumulativeYield += newPrincipal * Cnow;
+
+        // Emit event for off-chain accounting
+        emit Compounded(user, newPrincipal, interest, block.timestamp);
     }
 
     // =====================================================================
