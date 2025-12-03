@@ -452,21 +452,46 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @notice Claim full balance (principal + simple interest)
     /// @param user Address of user claiming
     function claim(address user) external whenClaimable {
-        // TODO: Implement claim logic
-        // HINTS:
-        // 1. Get principal from userStakes[user].amountDeposited
-        // 2. Check principal > 0 (NotEnoughToClaim error)
-        // 3. Get t0 from userStakes[user].latestDepositTimestamp
-        // 4. Calculate Cnow = _cumulativeYield(block.timestamp)
-        // 5. Calculate Ct0 = _cumulativeYield(t0)
-        // 6. Calculate interest = Math.mulDiv(principal, (Cnow - Ct0), ONE)
-        // 7. Calculate payout = principal + interest
-        // 8. Update A: totalDeposited -= principal
-        // 9. Update B: sumDepositsTimesCumulativeYield -= principal * Ct0
-        // 10. Delete userStakes[user]
-        // 11. Check contract has enough balance (ContractHasNotEnoughBalance error)
-        // 12. Transfer payout to user using safeTransfer
-        // 13. Emit Claimed event
+        // Load the user's principal
+        uint256 principal = userStakes[user].amountDeposited;
+
+        // User must have an active stake
+        if (principal == 0) {
+            revert NotEnoughToClaim();
+        }
+
+        // Load the original deposit timestamp
+        uint256 t0 = userStakes[user].latestDepositTimestamp;
+
+        // Compute cumulative yield at now and at deposit time
+        uint256 Cnow = _cumulativeYield(block.timestamp);
+        uint256 Ct0 = _cumulativeYield(t0);
+
+        // Simple interest earned between t0 and now
+        uint256 deltaC = Cnow - Ct0;
+        uint256 interest = Math.mulDiv(principal, deltaC, ONE);
+
+        // Total amount owed to the user
+        uint256 payout = principal + interest;
+
+        // Update global aggregates: remove the old principal position
+        totalDeposited -= principal;
+        sumDepositsTimesCumulativeYield -= principal * Ct0;
+
+        // Clear the user's stake
+        delete userStakes[user];
+
+        // Ensure the contract has enough tokens to pay the user
+        uint256 balance = BKNToken.balanceOf(address(this));
+        if (payout > balance) {
+            revert ContractHasNotEnoughBalance(payout, balance);
+        }
+
+        // Transfer principal + interest to the user
+        BKNToken.safeTransfer(user, payout);
+
+        // Emit event for off-chain tracking
+        emit Claimed(user, principal, interest, block.timestamp);
     }
 
     // =====================================================================
