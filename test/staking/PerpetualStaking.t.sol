@@ -335,30 +335,105 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_compound_no_additional_amount() public {
-        // TODO: Test compounding without additional deposit
-        // HINTS:
-        // 1. Deposit amount X
-        // 2. Warp forward by SECONDS_IN_A_YEAR / 2
-        // 3. Compound with amount = 0
-        // 4. Assert new principal = X + interest
-        // 5. Assert latestDepositTimestamp updated to now
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Fix timestamp for deterministic behavior
+        vm.warp(1000);
+
+        // Approve and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move forward by half a year
+        uint256 halfYear = SECONDS_IN_A_YEAR / 2;
+        vm.warp(block.timestamp + halfYear);
+
+        // Compute expected interest for half a year at current yieldPerSecond
+        uint256 yieldPerSecond = perpetualStaking.yieldPerSecond();
+        uint256 deltaC = yieldPerSecond * halfYear;
+        uint256 expectedInterest = (amount * deltaC) / 1e18;
+        uint256 expectedNewPrincipal = amount + expectedInterest;
+
+        // Compound without adding extra amount
+        vm.prank(staker1);
+        perpetualStaking.compoundAndDeposit(staker1, 0);
+
+        // Check new principal and timestamp
+        (uint256 newPrincipal, uint256 ts) = perpetualStaking.userStakes(
+            staker1
+        );
+        assertEq(newPrincipal, expectedNewPrincipal);
+        assertEq(ts, block.timestamp);
+
+        // Global principal should match the new principal
+        assertEq(perpetualStaking.totalDeposited(), expectedNewPrincipal);
     }
 
     function test_compound_with_additional_amount() public {
-        // TODO: Test compounding with additional deposit
-        // HINTS:
-        // 1. Deposit X
-        // 2. Warp forward by SECONDS_IN_A_YEAR / 2
-        // 3. Compound with additional amount Y
-        // 4. Assert new principal = X + interest + Y
+        uint256 initialAmount = STAKER1_BKN_AMOUNT / 4;
+        uint256 extraAmount = STAKER1_BKN_AMOUNT / 4;
+
+        // Fix timestamp for determinism
+        vm.warp(1000);
+
+        // Approve enough tokens for initial deposit and extra amount
+        vm.prank(staker1);
+        bkn.approve(
+            address(perpetualStaking),
+            initialAmount + extraAmount
+        );
+
+        // Initial deposit
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, initialAmount);
+
+        // Move forward by half a year
+        uint256 halfYear = SECONDS_IN_A_YEAR / 2;
+        vm.warp(block.timestamp + halfYear);
+
+        // Compute expected interest on the initial principal
+        uint256 yieldPerSecond = perpetualStaking.yieldPerSecond();
+        uint256 deltaC = yieldPerSecond * halfYear;
+        uint256 expectedInterest = (initialAmount * deltaC) / 1e18;
+        uint256 expectedNewPrincipal = initialAmount + expectedInterest + extraAmount;
+
+        // Compound and add extra amount
+        vm.prank(staker1);
+        perpetualStaking.compoundAndDeposit(staker1, extraAmount);
+
+        // Check new principal
+        (uint256 newPrincipal, ) = perpetualStaking.userStakes(staker1);
+        assertEq(newPrincipal, expectedNewPrincipal);
     }
 
     function test_compound_revert_no_stake_no_amount() public {
-        // TODO: Test compound reverts with no stake and no amount
+        // User has no stake and tries to compound with amount = 0
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.NotEnoughToDeposit.selector);
+        perpetualStaking.compoundAndDeposit(staker1, 0);
     }
 
     function test_compound_revert_when_paused() public {
-        // TODO: Test compound reverts when paused
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve and deposit first
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Owner pauses compound
+        vm.prank(owner);
+        perpetualStaking.pauseCompound();
+
+        // Any compound attempt should revert with CompoundIsClosed
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.CompoundIsClosed.selector);
+        perpetualStaking.compoundAndDeposit(staker1, 0);
     }
 
     // =====================================================================
