@@ -32,7 +32,7 @@ contract PerpetualStakingTest is Test {
     // SETUP
     // =====================================================================
 
-        function setUp() public {
+    function setUp() public {
         // Deploy BKN token
         bkn = new Brickken();
 
@@ -57,7 +57,7 @@ contract PerpetualStakingTest is Test {
     // INITIALIZATION TESTS
     // =====================================================================
 
-        function test_initialization() public {
+    function test_initialization() public {
         // Owner should be set correctly
         assertEq(perpetualStaking.owner(), owner);
 
@@ -83,36 +83,115 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_deposit() public {
-        // TODO: Test basic deposit
-        // HINTS:
-        // 1. Approve tokens for contract
-        // 2. Call deposit
-        // 3. Assert userStakes shows correct amount and timestamp
-        // 4. Assert user balance decreased
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Fix the current block timestamp for deterministic checks
+        vm.warp(1000);
+
+        // Approve tokens for the staking contract
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Record user balance before deposit
+        uint256 balanceBefore = bkn.balanceOf(staker1);
+
+        // Perform the deposit
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Check stored stake data
+        (uint256 deposited, uint256 ts) = perpetualStaking.userStakes(staker1);
+        assertEq(deposited, amount);
+        assertEq(ts, block.timestamp);
+
+        // Check user balance decreased by the deposited amount
+        uint256 balanceAfter = bkn.balanceOf(staker1);
+        assertEq(balanceAfter, balanceBefore - amount);
+
+        // Check global totalDeposited matches the deposited amount
+        assertEq(perpetualStaking.totalDeposited(), amount);
     }
+
 
     function test_deposit_revert_already_deposited() public {
-        // TODO: Test that second deposit reverts
-        // HINTS:
-        // - Deposit once
-        // - Try to deposit again
-        // - Use vm.expectRevert(abi.encodeWithSelector(...))
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve enough tokens for two attempts
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), STAKER1_BKN_AMOUNT);
+
+        // First deposit succeeds
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Second deposit should revert with AlreadyDeposited error
+        vm.prank(staker1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PerpetualStaking.AlreadyDeposited.selector,
+                staker1
+            )
+        );
+        perpetualStaking.deposit(staker1, amount);
     }
+
 
     function test_deposit_revert_when_paused() public {
-        // TODO: Test deposit reverts when paused
-        // HINTS:
-        // - Owner calls pauseDeposit()
-        // - Try to deposit
-        // - Expect DepositsAreClosed error
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Owner pauses deposits
+        vm.prank(owner);
+        perpetualStaking.pauseDeposit();
+
+        // Approve tokens for the staking contract
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit should revert with DepositsAreClosed error
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.DepositsAreClosed.selector);
+        perpetualStaking.deposit(staker1, amount);
     }
 
+
     function test_multiple_deposits_different_stakers() public {
-        // TODO: Test multiple stakers can deposit
-        // HINTS:
-        // - Deposit for staker1, staker2, staker3
-        // - Assert totalDeposited increases correctly
-        // - Assert each user's stake is tracked separately
+        // Amounts for each staker
+        uint256 amount1 = STAKER1_BKN_AMOUNT / 2;
+        uint256 amount2 = STAKER2_BKN_AMOUNT / 2;
+        uint256 amount3 = STAKER3_BKN_AMOUNT / 2;
+
+        // Approve tokens for each staker
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount1);
+
+        vm.prank(staker2);
+        bkn.approve(address(perpetualStaking), amount2);
+
+        vm.prank(staker3);
+        bkn.approve(address(perpetualStaking), amount3);
+
+        // Perform deposits
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount1);
+
+        vm.prank(staker2);
+        perpetualStaking.deposit(staker2, amount2);
+
+        vm.prank(staker3);
+        perpetualStaking.deposit(staker3, amount3);
+
+        // Check stakes for each staker
+        (uint256 dep1, ) = perpetualStaking.userStakes(staker1);
+        (uint256 dep2, ) = perpetualStaking.userStakes(staker2);
+        (uint256 dep3, ) = perpetualStaking.userStakes(staker3);
+
+        assertEq(dep1, amount1);
+        assertEq(dep2, amount2);
+        assertEq(dep3, amount3);
+
+        // Check global totalDeposited is the sum of all deposits
+        uint256 expectedTotal = amount1 + amount2 + amount3;
+        assertEq(perpetualStaking.totalDeposited(), expectedTotal);
     }
 
     // =====================================================================
