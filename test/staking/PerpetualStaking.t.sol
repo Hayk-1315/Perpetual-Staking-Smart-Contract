@@ -199,47 +199,135 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_claim_principal_only() public {
-        // TODO: Test claiming immediately after deposit
-        // HINTS:
-        // 1. Deposit immediately
-        // 2. Claim immediately (no time passed, no interest)
-        // 3. Assert user receives principal back
-        // 4. Assert userStakes[user] is deleted
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Fix timestamp for deterministic behavior
+        vm.warp(1000);
+
+        // Approve tokens and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        uint256 balanceBefore = bkn.balanceOf(staker1);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Claim immediately (no time passed, no interest)
+        vm.prank(staker1);
+        perpetualStaking.claim(staker1);
+
+        // User should recover exactly the principal (net effect = -amount + amount)
+        uint256 balanceAfter = bkn.balanceOf(staker1);
+        assertEq(balanceAfter, balanceBefore);
+
+        // Stake should be cleared
+        (uint256 deposited, uint256 ts) = perpetualStaking.userStakes(staker1);
+        assertEq(deposited, 0);
+        assertEq(ts, 0);
+
+        // Global principal should be back to zero
+        assertEq(perpetualStaking.totalDeposited(), 0);
     }
 
     function test_claim_with_interest() public {
-        // TODO: Test claiming with accumulated interest
-        // HINTS:
-        // 1. Deposit
-        // 2. Warp forward (vm.warp) by SECONDS_IN_A_YEAR
-        // 3. Claim
-        // 4. Assert user receives principal + interest
-        // 5. Calculate expected interest and verify
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Start at a known timestamp
+        vm.warp(1000);
+
+        // Approve and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        uint256 balanceBefore = bkn.balanceOf(staker1);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move forward by one year
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Reproduce the same interest formula as the contract (constant rate case)
+        uint256 yieldPerSecond = perpetualStaking.yieldPerSecond();
+        uint256 deltaC = yieldPerSecond * SECONDS_IN_A_YEAR;
+        uint256 expectedInterest = (amount * deltaC) / 1e18;
+        uint256 expectedPayout = amount + expectedInterest;
+
+        // Claim funds
+        vm.prank(staker1);
+        perpetualStaking.claim(staker1);
+
+        uint256 balanceAfter = bkn.balanceOf(staker1);
+
+        // Net effect on user balance = -amount (deposit) + payout (principal + interest)
+        uint256 expectedFinalBalance = balanceBefore - amount + expectedPayout;
+        assertEq(balanceAfter, expectedFinalBalance);
+
+        // After claiming, stake and global principal should be cleared
+        (uint256 deposited, ) = perpetualStaking.userStakes(staker1);
+        assertEq(deposited, 0);
+        assertEq(perpetualStaking.totalDeposited(), 0);
     }
 
     function test_claim_revert_no_stake() public {
-        // TODO: Test claiming with no stake reverts
-        // HINTS:
-        // - Try to claim without depositing
-        // - Expect NotEnoughToClaim error
+        // User has no active stake
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.NotEnoughToClaim.selector);
+        perpetualStaking.claim(staker1);
     }
 
     function test_claim_revert_when_paused() public {
-        // TODO: Test claim reverts when paused
-        // HINTS:
-        // - Deposit
-        // - Owner calls pauseClaim()
-        // - Try to claim
-        // - Expect ClaimsAreClosed error
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve and deposit first
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Owner pauses claims
+        vm.prank(owner);
+        perpetualStaking.pauseClaim();
+
+        // Claim should revert with ClaimsAreClosed
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.ClaimsAreClosed.selector);
+        perpetualStaking.claim(staker1);
     }
 
     function test_claim_revert_insufficient_balance() public {
-        // TODO: Test claim reverts if contract has insufficient balance
-        // HINTS:
-        // 1. Deposit
-        // 2. Owner removes tokens via removeTokens()
-        // 3. Try to claim
-        // 4. Expect ContractHasNotEnoughBalance error
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+        
+        
+        // Fix timestamp for determinism
+        vm.warp(1000);
+
+        // Approve and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Owner empties the contract balance using removeTokens
+        IERC20Upgradeable token = IERC20Upgradeable(address(bkn));
+        uint256 contractBalance = bkn.balanceOf(address(perpetualStaking));
+
+        vm.prank(owner);
+        perpetualStaking.removeTokens(token, owner, contractBalance);
+
+        // Now the contract has 0 BKN; any claim should fail with ContractHasNotEnoughBalance(amount, 0)
+        vm.prank(staker1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PerpetualStaking.ContractHasNotEnoughBalance.selector,
+                amount,
+                0
+            )
+        );
+        perpetualStaking.claim(staker1);
     }
 
     // =====================================================================
