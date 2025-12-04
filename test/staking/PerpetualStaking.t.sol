@@ -32,31 +32,51 @@ contract PerpetualStakingTest is Test {
     // SETUP
     // =====================================================================
 
-    function setUp() public {
-        // TODO: Deploy BKN token
-        // TODO: Deploy PerpetualStaking
-        // TODO: Initialize PerpetualStaking
-        // TODO: Deal BKN tokens to owner, staker1, staker2, staker3
-        // TODO: Transfer ownership if needed
-        // HINTS:
-        // 1. vm.prank(owner) for owner-only operations
-        // 2. Use deal() to allocate ERC20 tokens
-        // 3. Initialize with owner and BKN address
+        function setUp() public {
+        // Deploy BKN token
+        bkn = new Brickken();
+
+        // Deploy PerpetualStaking
+        perpetualStaking = new PerpetualStaking();
+
+        // Initialize staking with BKN token and owner address
+        perpetualStaking.initialize(address(bkn), owner);
+
+        // Allocate BKN balances to owner and stakers
+        deal(address(bkn), owner, OWNER_BKN_AMOUNT);
+        deal(address(bkn), staker1, STAKER1_BKN_AMOUNT);
+        deal(address(bkn), staker2, STAKER2_BKN_AMOUNT);
+        deal(address(bkn), staker3, STAKER3_BKN_AMOUNT);
+
+        // Optionally pre-fund the staking contract to cover interest payouts in tests
+        deal(address(bkn), address(perpetualStaking), OWNER_BKN_AMOUNT);
     }
+
 
     // =====================================================================
     // INITIALIZATION TESTS
     // =====================================================================
 
-    function test_initialization() public {
-        // TODO: Test that contract initializes correctly
-        // HINTS:
-        // - Assert owner is set
-        // - Assert BKNToken address is correct
-        // - Assert yieldPerYear is 15e16
-        // - Assert isDepositable, isClaimable, isCompoundable are true
-        // - Assert yieldPerSecond = yieldPerYear / SECONDS_IN_A_YEAR
+        function test_initialization() public {
+        // Owner should be set correctly
+        assertEq(perpetualStaking.owner(), owner);
+
+        // BKN token address should match the deployed Brickken token
+        assertEq(address(perpetualStaking.BKNToken()), address(bkn));
+
+        // Yield per year should be set to the expected constant (15% in 1e18 scale)
+        assertEq(perpetualStaking.yieldPerYear(), YIELD_PER_YEAR);
+
+        // Flags should be enabled by default
+        assertTrue(perpetualStaking.isDepositable());
+        assertTrue(perpetualStaking.isClaimable());
+        assertTrue(perpetualStaking.isCompoundable());
+
+        // Yield per second should be derived from yield per year
+        uint256 expectedYieldPerSecond = YIELD_PER_YEAR / SECONDS_IN_A_YEAR;
+        assertEq(perpetualStaking.yieldPerSecond(), expectedYieldPerSecond);
     }
+
 
     // =====================================================================
     // DEPOSIT TESTS

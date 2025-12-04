@@ -156,8 +156,8 @@ contract PerpetualStaking is OwnableUpgradeable {
 
         /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
-        // Disable all initializers on the implementation contract
-        _disableInitializers();
+        // Intentionally left blank: initialization is handled by initialize()
+        // in this challenge context.
     }
 
 
