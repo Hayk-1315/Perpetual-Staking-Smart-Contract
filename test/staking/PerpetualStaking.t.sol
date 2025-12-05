@@ -742,37 +742,124 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_pause_unpause_deposit() public {
-        // TODO: Test pause/unpause deposit
-        // HINTS:
-        // - Assert isDepositable starts true
-        // - Call pauseDeposit()
-        // - Assert isDepositable is false
-        // - Call unpauseDeposit()
-        // - Assert isDepositable is true
+        // Deposits should be enabled by default
+        assertTrue(perpetualStaking.isDepositable());
+
+        // Owner pauses deposits
+        vm.prank(owner);
+        perpetualStaking.pauseDeposit();
+
+        // Deposits should now be disabled
+        assertFalse(perpetualStaking.isDepositable());
+
+        // Owner unpauses deposits
+        vm.prank(owner);
+        perpetualStaking.unpauseDeposit();
+
+        // Deposits should be enabled again
+        assertTrue(perpetualStaking.isDepositable());
     }
 
     function test_pause_unpause_claim() public {
-        // TODO: Test pause/unpause claim
+        // Claims should be enabled by default
+        assertTrue(perpetualStaking.isClaimable());
+
+        // Owner pauses claims
+        vm.prank(owner);
+        perpetualStaking.pauseClaim();
+
+        // Claims should now be disabled
+        assertFalse(perpetualStaking.isClaimable());
+
+        // Owner unpauses claims
+        vm.prank(owner);
+        perpetualStaking.unpauseClaim();
+
+        // Claims should be enabled again
+        assertTrue(perpetualStaking.isClaimable());
     }
 
     function test_pause_unpause_compound() public {
-        // TODO: Test pause/unpause compound
+        // Compounding should be enabled by default
+        assertTrue(perpetualStaking.isCompoundable());
+
+        // Owner pauses compounding
+        vm.prank(owner);
+        perpetualStaking.pauseCompound();
+
+        // Compounding should now be disabled
+        assertFalse(perpetualStaking.isCompoundable());
+
+        // Owner unpauses compounding
+        vm.prank(owner);
+        perpetualStaking.unpauseCompound();
+
+        // Compounding should be enabled again
+        assertTrue(perpetualStaking.isCompoundable());
     }
 
     function test_remove_tokens() public {
-        // TODO: Test removeTokens
-        // HINTS:
-        // 1. Deposit to get tokens in contract
-        // 2. Owner calls removeTokens
-        // 3. Assert tokens were transferred
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve and deposit to move tokens into the staking contract
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Prepare token interface for removeTokens
+        IERC20Upgradeable token = IERC20Upgradeable(address(bkn));
+
+        // Record balances before removal
+        uint256 ownerBefore = bkn.balanceOf(owner);
+        uint256 contractBefore = bkn.balanceOf(address(perpetualStaking));
+
+        // Owner removes tokens from the staking contract
+        vm.prank(owner);
+        perpetualStaking.removeTokens(token, owner, amount);
+
+        // Check balances after removal
+        uint256 ownerAfter = bkn.balanceOf(owner);
+        uint256 contractAfter = bkn.balanceOf(address(perpetualStaking));
+
+        // Owner should receive the removed amount
+        assertEq(ownerAfter, ownerBefore + amount);
+
+        // Contract balance should decrease by the removed amount
+        assertEq(contractAfter, contractBefore - amount);
     }
 
     function test_change_user_address() public {
-        // TODO: Test changeUserAddress
-        // HINTS:
-        // 1. Deposit as staker1
-        // 2. Owner calls changeUserAddress(staker1, staker2)
-        // 3. Assert userStakes[staker1] is empty
-        // 4. Assert userStakes[staker2] has the stake
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp
+        vm.warp(1000);
+
+        // Approve and deposit for staker1
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Confirm stake exists for staker1
+        (uint256 depBefore, uint256 tsBefore) = perpetualStaking.userStakes(staker1);
+        assertEq(depBefore, amount);
+        assertEq(tsBefore, block.timestamp);
+
+        // Owner changes stake ownership from staker1 to staker2
+        vm.prank(owner);
+        perpetualStaking.changeUserAddress(staker1, staker2);
+
+        // staker1 stake should be cleared
+        (uint256 dep1After, uint256 ts1After) = perpetualStaking.userStakes(staker1);
+        assertEq(dep1After, 0);
+        assertEq(ts1After, 0);
+
+        // staker2 should now own the stake
+        (uint256 dep2After, uint256 ts2After) = perpetualStaking.userStakes(staker2);
+        assertEq(dep2After, amount);
+        assertEq(ts2After, tsBefore);
     }
 }
