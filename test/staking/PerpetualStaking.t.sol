@@ -576,42 +576,166 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_get_withdrawable_user_balance_no_time() public {
-        // TODO: Test getWithdrawableUserBalance immediately after deposit
-        // HINTS:
-        // - Deposit X
-        // - Assert balance = X (no interest yet)
+        // Use a simple deposit amount for the test
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract to spend staker1 tokens
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit tokens into the staking contract
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Immediately check withdrawable balance (should equal principal)
+        uint256 balance = perpetualStaking.getWithdrawableUserBalance(staker1);
+
+        // No time passed, so no interest should be accrued
+        assertEq(balance, amount);
     }
 
+
     function test_get_withdrawable_user_balance_with_time() public {
-        // TODO: Test getWithdrawableUserBalance after time passes
-        // HINTS:
-        // 1. Deposit X
-        // 2. Warp by 1 year
-        // 3. Assert balance > X (with interest)
+        // Use a simple deposit amount for the test
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract to spend staker1 tokens
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit tokens into the staking contract
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move time forward by one year to accumulate interest
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Check withdrawable balance after time has passed
+        uint256 balance = perpetualStaking.getWithdrawableUserBalance(staker1);
+
+        // With one year elapsed, balance should be greater than principal
+        assertTrue(balance > amount);
     }
 
     function test_get_total_funds_needed() public {
-        // TODO: Test getTotalFundsNeeded
-        // HINTS:
-        // 1. Deposit multiple users
-        // 2. Warp forward
-        // 3. Assert getTotalFundsNeeded >= totalDeposited
-        // 4. Verify calculation is correct
+        // Define deposit amounts for three different stakers
+        uint256 amount1 = STAKER1_BKN_AMOUNT / 2;
+        uint256 amount2 = STAKER2_BKN_AMOUNT / 2;
+        uint256 amount3 = STAKER3_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract for each staker
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount1);
+        vm.prank(staker2);
+        bkn.approve(address(perpetualStaking), amount2);
+        vm.prank(staker3);
+        bkn.approve(address(perpetualStaking), amount3);
+
+        // Deposit tokens for each staker
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount1);
+        vm.prank(staker2);
+        perpetualStaking.deposit(staker2, amount2);
+        vm.prank(staker3);
+        perpetualStaking.deposit(staker3, amount3);
+
+        // Move time forward by one year to accumulate interest
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Compute total liabilities if everyone withdrew now
+        uint256 totalNeeded = perpetualStaking.getTotalFundsNeeded();
+
+        // Sanity check: liabilities should be at least total principal
+        assertTrue(totalNeeded >= perpetualStaking.totalDeposited());
+
+        // Sum individual withdrawable balances
+        uint256 sumUsers =
+            perpetualStaking.getWithdrawableUserBalance(staker1) +
+            perpetualStaking.getWithdrawableUserBalance(staker2) +
+            perpetualStaking.getWithdrawableUserBalance(staker3);
+
+        // Allow tiny rounding differences between global and per-user calculations
+        assertApproxEqAbs(totalNeeded, sumUsers, 2);
     }
+
 
     function test_get_current_yield_rate() public {
-        // TODO: Test getCurrentYieldRate
-        // HINTS:
-        // 1. Initially should return yieldPerSecond
-        // 2. After adding yield change and warping, should return new rate
+        // Initially, the active yield rate should be the base yieldPerSecond
+        (uint256 rate0, uint256 start0) = perpetualStaking.getCurrentYieldRate();
+        assertEq(rate0, perpetualStaking.yieldPerSecond());
+        assertEq(start0, 0);
+
+        // Define a future yield change start time
+        uint256 startTime = block.timestamp + 1000;
+
+        // Define a new yearly yield rate (20%)
+        uint256 newYieldPerYear = 2e17;
+
+        // Convert yearly rate into per-second rate
+        uint256 expectedRatePerSecond = newYieldPerYear / SECONDS_IN_A_YEAR;
+
+        // Owner schedules the yield change
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(newYieldPerYear, startTime);
+
+        // Warp to after the start time so the new rate becomes active
+        vm.warp(startTime + 1);
+
+        // Fetch the current active yield rate
+        (uint256 rate1, uint256 start1) = perpetualStaking.getCurrentYieldRate();
+
+        // Verify that the new rate is active and the start time matches
+        assertEq(rate1, expectedRatePerSecond);
+        assertEq(start1, startTime);
+                
     }
 
+
     function test_get_net_owed() public {
-        // TODO: Test getNetOwed
-        // HINTS:
-        // 1. If contract is solvent, should return 0
-        // 2. If liabilities > assets, should return difference
+        // Use a simple deposit amount for the test
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract to spend staker1 tokens
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit tokens into the staking contract
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move time forward by one year to accumulate interest
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Compute current liabilities
+        uint256 liabilities = perpetualStaking.getTotalFundsNeeded();
+
+        // Ensure the contract has enough assets to be solvent
+        deal(address(bkn), address(perpetualStaking), liabilities + 1);
+
+        // If solvent, net owed should be zero
+        uint256 netOwedSolvent = perpetualStaking.getNetOwed();
+        assertEq(netOwedSolvent, 0);
+
+        // Now force insolvency by removing all assets
+        deal(address(bkn), address(perpetualStaking), 0);
+
+        // If insolvent, net owed should equal liabilities
+        uint256 netOwedInsolvent = perpetualStaking.getNetOwed();
+        assertEq(netOwedInsolvent, liabilities);
     }
+
 
     // =====================================================================
     // ADMIN FUNCTIONS TESTS
