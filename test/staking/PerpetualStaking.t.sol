@@ -862,4 +862,35 @@ contract PerpetualStakingTest is Test {
         assertEq(dep2After, amount);
         assertEq(ts2After, tsBefore);
     }
+
+    function test_brickken_mint_and_transfer_basic() public {
+        // Use fresh addresses to avoid balances preloaded in setUp()
+        address newUser = makeAddr("NEW_USER");
+        address receiver = makeAddr("RECEIVER");
+
+        uint256 mintAmount = 100 ether;
+        uint256 transferAmount = 40 ether;
+
+        // Choose a valid minter (depends on who deployed the token in setUp)
+        address minter = owner;
+        if (!bkn.hasRole(bkn.MINTER_ROLE(), minter)) {
+            minter = address(this);
+        }
+
+        // Mint tokens to a fresh user
+        vm.prank(minter);
+        bkn.mint(newUser, mintAmount);
+
+        // Check balance after mint
+        assertEq(bkn.balanceOf(newUser), mintAmount);
+
+        // Transfer part of the tokens to another fresh address
+        vm.prank(newUser);
+        bkn.transfer(receiver, transferAmount);
+
+        // Check balances after transfer
+        assertEq(bkn.balanceOf(newUser), mintAmount - transferAmount);
+        assertEq(bkn.balanceOf(receiver), transferAmount);
+   }
+
 }
