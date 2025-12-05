@@ -52,6 +52,18 @@ contract PerpetualStakingTest is Test {
         deal(address(bkn), address(perpetualStaking), OWNER_BKN_AMOUNT);
     }
 
+    function _assertYieldAt(
+        uint256 warpTo,
+        uint256 expectedRate,
+        uint256 expectedStart
+    ) internal {
+        vm.warp(warpTo);
+        (uint256 rate, uint256 start) = perpetualStaking.getCurrentYieldRate();
+        assertEq(rate, expectedRate);
+        assertEq(start, expectedStart);
+    }
+
+
 
     // =====================================================================
     // INITIALIZATION TESTS
@@ -441,44 +453,122 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_add_yield_change() public {
-        // TODO: Test adding a yield change
-        // HINTS:
-        // 1. Owner calls addYieldChange with future timestamp and new rate
-        // 2. Assert getCurrentYieldRate still returns old rate
-        // 3. Warp to past the new timestamp
-        // 4. Assert getCurrentYieldRate returns new rate
+        // Initial rate should be the base yieldPerSecond
+        (uint256 baseRate, uint256 baseStart) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(baseRate, perpetualStaking.yieldPerSecond());
+        assertEq(baseStart, 0);
+
+        // Define a future start time and a new yearly rate (20%)
+        uint256 startTime = block.timestamp + 1000;
+        uint256 newYieldPerYear = 2e17; // 20%
+        uint256 expectedRatePerSecond = newYieldPerYear / SECONDS_IN_A_YEAR;
+
+        // Owner schedules the new yield rate
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(newYieldPerYear, startTime);
+
+        // Before the start time, the current rate should still be the base rate
+        vm.warp(startTime - 1);
+        (uint256 rateBefore, uint256 startBefore) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateBefore, perpetualStaking.yieldPerSecond());
+        assertEq(startBefore, 0);
+
+        // After the start time, the current rate should be the new rate
+        vm.warp(startTime + 1);
+        (uint256 rateAfter, uint256 startAfter) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateAfter, expectedRatePerSecond);
+        assertEq(startAfter, startTime);
     }
 
     function test_add_yield_change_revert_past_time() public {
-        // TODO: Test adding yield change with past timestamp reverts
-        // HINTS:
-        // - Call addYieldChange with past timestamp
-        // - Expect InvalidStartTime error
+         // Move time forward so we can define a "past" timestamp
+        vm.warp(1_000);
+
+        uint256 pastTime = block.timestamp - 1;
+        uint256 newYieldPerYear = 2e17; // 20%
+
+        vm.prank(owner);
+        vm.expectRevert(PerpetualStaking.InvalidStartTime.selector);
+        perpetualStaking.addYieldChange(newYieldPerYear, pastTime);
     }
 
     function test_add_yield_change_revert_not_increasing() public {
-        // TODO: Test adding non-increasing timestamps reverts
-        // HINTS:
-        // 1. Add yield change at time T
-        // 2. Try to add another at time T (or earlier)
-        // 3. Expect StartTimeMustIncrease error
+        vm.warp(1_000);
+
+        uint256 T1 = block.timestamp + 100;
+        uint256 T2 = T1; // not strictly greater, should revert
+        uint256 ratePerYear1 = 2e17; // 20%
+        uint256 ratePerYear2 = 25e16; // 25%
+
+        // First yield change at T1 is valid
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(ratePerYear1, T1);
+
+        // Second yield change with non-increasing timestamp should revert
+        vm.prank(owner);
+        vm.expectRevert(PerpetualStaking.StartTimeMustIncrease.selector);
+        perpetualStaking.addYieldChange(ratePerYear2, T2);
     }
 
     function test_remove_yield_change() public {
-        // TODO: Test removing a yield change
-        // HINTS:
-        // 1. Add yield change
-        // 2. Remove it
-        // 3. Assert it's no longer in schedule
+        vm.warp(1_000);
+
+        uint256 startTime = block.timestamp + 100;
+        uint256 newYieldPerYear = 2e17; // 20%
+        uint256 expectedRatePerSecond = newYieldPerYear / SECONDS_IN_A_YEAR;
+
+        // Add yield change
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(newYieldPerYear, startTime);
+
+        // After the start time, the new rate should be active
+        vm.warp(startTime + 1);
+        (uint256 rateAfterAdd, uint256 startAfterAdd) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateAfterAdd, expectedRatePerSecond);
+        assertEq(startAfterAdd, startTime);
+
+        // Remove the yield change
+        vm.prank(owner);
+        perpetualStaking.removeYieldChange(startTime);
+
+        // After removal, the contract should fall back to the base rate
+        vm.warp(startTime + 2);
+        (uint256 rateAfterRemove, uint256 startAfterRemove) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateAfterRemove, perpetualStaking.yieldPerSecond());
+        assertEq(startAfterRemove, 0);
     }
 
     function test_multiple_yield_changes() public {
-        // TODO: Test multiple yield changes over time
-        // HINTS:
-        // 1. Add yield change at T1 (20%)
-        // 2. Add yield change at T2 (25%)
-        // 3. Add yield change at T3 (30%)
-        // 4. Warp to each time and verify getCurrentYieldRate returns correct value
+        vm.warp(1_000);
+
+        uint256 baseRate = perpetualStaking.yieldPerSecond();
+
+        uint256 T1 = block.timestamp + 100;
+        uint256 T2 = T1 + 100;
+        uint256 T3 = T2 + 100;
+
+        uint256 rateSec1 = (2e17) / SECONDS_IN_A_YEAR;   // 20%
+        uint256 rateSec2 = (25e16) / SECONDS_IN_A_YEAR;  // 25%
+        uint256 rateSec3 = (3e17) / SECONDS_IN_A_YEAR;   // 30%
+
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(2e17, T1);
+
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(25e16, T2);
+
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(3e17, T3);
+
+        _assertYieldAt(T1 - 1, baseRate, 0);
+        _assertYieldAt(T1 + 1, rateSec1, T1);
+        _assertYieldAt(T2 + 1, rateSec2, T2);
+        _assertYieldAt(T3 + 1, rateSec3, T3);
     }
 
     // =====================================================================
