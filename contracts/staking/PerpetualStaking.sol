@@ -120,7 +120,8 @@ contract PerpetualStaking is OwnableUpgradeable {
     error InvalidStartTime();
     error StartTimeMustIncrease();
 
-    uint256[] __gap; // TO-DO update the size of the gap accordingly
+    // Reserved storage space to allow for layout changes in the future.
+        uint256[50] private __gap;
 
     // =====================================================================
     // MODIFIERS
