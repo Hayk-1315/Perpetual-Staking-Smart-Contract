@@ -1,112 +1,264 @@
-# Blockchain Technical Assessment Instructions
+# Perpetual Staking Smart Contract (Solidity + Foundry)
 
-1. Unzip the original repository.
+This repository contains a implementation of a perpetual staking smart contract plus a full Foundry test suite.
+It started from a minimal skeleton (contract interface + empty tests) and was extended into a production‑style,
+portfolio‑ready project.
 
-2. Create a new private repository on your GitHub account.
+The focus of the project is to demonstrate:
 
-3. Add the following GitHub users as collaborators to your new repository: `xaler5`, `nabil-brickken`.
+- Clean, upgradeable Solidity code.
+- Correct interest and solvency accounting over time.
+- Careful handling of user funds and admin controls.
+- Professional Git workflow (stacked branches and pull requests).
+- Solid unit test coverage using Foundry.
 
-4. Clone your new repository to your local development environment.
+---
 
-5. Copy the content from the original repository to your new repository.
+## 1. Project Overview
 
-6. Make the initial commit.
+**Domain:** Perpetual staking with simple interest and a piecewise yield schedule.  
+**Language:** Solidity `<0.9.0` (tested with 0.8.29).  
+**Pattern:** Upgradeable contract using OpenZeppelin `OwnableUpgradeable` + `Initializable`.  
+**Token:** ERC‑20 staking token (governance / utility style).  
+**Tooling:** Foundry (`forge`, `forge-std`), OpenZeppelin contracts (upgradeable and non‑upgradeable).  
 
-7. Bellow in this document you will find the tasks to be completed within this challenge. The tasks should be performed in order. For each task, create a new branch with the same name of the task.  For example, for the first task named `Install and configure Foundry` you should create a branch named `TASK-1-foundry-configuration`.
+At a high level, stakers deposit an ERC‑20 token into the `PerpetualStaking` contract and earn **simple interest**
+over time. The APY can change at specific timestamps, and the contract keeps a global solvency model to know,
+at any moment, how much it would need to pay out if everyone withdrew.
 
-8. Once you complete a task, create a pull request with the main branch as the base.
+---
 
-9. For the next task, create a new branch from the branch of the previous task (not from the main branch). When
-   finished, create a pull request with the branch of the previous task as the base.
+## 2. Main Features
 
-10. Repeat step 9 for all remaining tasks.
+### 2.1 PerpetualStaking contract
 
+Core features implemented in `PerpetualStaking.sol`:
 
-### Branching Strategy
+- ✅ **Upgradeable / Ownable**
+  - Uses OpenZeppelin upgradeable base contracts.
+  - `initialize(address _token, address _owner)` sets the staking token and contract owner.
+  - `reinitialize(address _token)` allows updating the token address in version 2 while keeping state consistent.
 
-```mermaid
-gitGraph
-    branch "TASK-1-foundry-configuration"
-    commit
-    commit
-    branch "TASK-2-initial-functions"
-    commit
-    commit
-    branch "TASK-3-Admin-functions"
-    commit
-    commit
+- ✅ **Staking controls (feature flags)**
+  - `isDepositable`, `isClaimable`, `isCompoundable` booleans.
+  - Modifiers:
+    - `whenDepositable`
+    - `whenClaimable`
+    - `whenCompoundable`
+  - Admin functions to pause/unpause each action:
+    - `pauseDeposit` / `unpauseDeposit`
+    - `pauseClaim` / `unpauseClaim`
+    - `pauseCompound` / `unpauseCompound`
 
+- ✅ **User staking lifecycle**
+  - `deposit(address user, uint256 amount)`  
+    First‑time deposit for a user. Records principal and timestamp, transfers tokens into the contract,
+    and updates the solvency accounting.
+  - `compoundAndDeposit(address user, uint256 amount)`  
+    - Realises accrued simple interest on the existing principal.  
+    - Optionally adds more tokens (`amount`) from the user.  
+    - Updates the user stake to a new principal (`oldPrincipal + interest + amount`) with a fresh timestamp.  
+    - Keeps the global solvency model consistent.
+  - `claim(address user)`  
+    - Computes `principal + simple interest` from the last deposit/compound timestamp.  
+    - Updates global totals and deletes the user stake.  
+    - Transfers the payout to the user, reverting if the contract balance is not sufficient.
+
+- ✅ **Yield schedule management**
+  - Global base yield per year (`yieldPerYear`) and per second (`yieldPerSecond`).
+  - A time‑ordered yield schedule using `EnumerableMap.UintToUintMap`:
+    - `addYieldChange(uint256 yieldRatePerYear, uint256 startTime)`  
+      Adds a future yield change (APY per year, converted to per‑second). Enforces strictly increasing start times.
+    - `removeYieldChange(uint256 startTime)`  
+      Removes a previously scheduled change.
+    - `getCurrentYieldRate()`  
+      Returns the active yield rate per second and its start timestamp, taking into account the schedule and `yieldPerSecond` as the default.
+
+- ✅ **Solvency model & view functions**
+
+  The contract uses the following model:
+
+  - Let `A` = `totalDeposited` (sum of all principals).
+  - Let `C(t)` = cumulative yield integral up to time `t` (scaled in 1e18).  
+  - Let `B` = `sumDepositsTimesCumulativeYield` = Σ dᵢ * C(t₀ᵢ) for each user deposit.
+  - Then the total liabilities at time `t` are:  
+    `S(t) = A + A * C(t) - B`
+
+  Implemented view functions:
+
+  - `getTotalFundsNeeded()`  
+    Returns `S(t)` = total funds required if everyone withdrew at the current block timestamp.
+  - `getNetOwed()`  
+    `max(S(t) - currentBalance, 0)` to know if the contract is under‑collateralized.
+  - `getWithdrawableUserBalance(address user)`  
+    Returns `principal + simple interest` for a given user at the current timestamp.
+
+  All of this relies on a private helper:
+
+  - `_cumulativeYield(uint256 targetTimestamp)`  
+    Computes `C(t)` by integrating the default yield and any scheduled yield changes up to `targetTimestamp`.
+
+- ✅ **Admin token management**
+  - `removeTokens(IERC20Upgradeable token, address to, uint256 amount)`  
+    Allows the owner to rescue tokens from the contract (used in tests to simulate under‑collateralization).
+  - `changeUserAddress(address from, address to)`  
+    Moves a stake from one address to another (e.g. KYC changes, account recovery).
+
+- ✅ **Events & custom errors**
+  - Events:
+    - `Deposited(user, amount, timestamp)`
+    - `Claimed(user, principal, interest, timestamp)`
+    - `Compounded(user, newPrincipal, interest, timestamp)`
+    - `YieldRateAdded(yieldRatePerYear, startTime, timestamp)`
+    - `YieldRateRemoved(startTime, timestamp)`
+  - Custom errors for clean, gas‑efficient reverts:
+    - `DepositsAreClosed()`, `ClaimsAreClosed()`, `CompoundIsClosed()`
+    - `NotEnoughToClaim()`, `NotEnoughToDeposit()`
+    - `ContractHasNotEnoughBalance(claimingAmount, balance)`
+    - `AlreadyDeposited(user)`, `InvalidStartTime()`, `StartTimeMustIncrease()`
+
+---
+
+## 3. Repository Structure
+
+```text
+contracts/
+  staking/
+    PerpetualStaking.sol        # Main staking logic (upgradeable)
+  token/
+    Brickken.sol                # ERC20 governance-style token used as the staking asset
+
+test/
+  staking/
+    PerpetualStaking.t.sol      # Full Foundry test suite for staking + basic token test
+
+foundry.toml                     # Foundry configuration (src, test, remappings, etc.)
 ```
 
-Remember that each pull request should be reviewed and approved before being merged with the base branch. Keep your
-commits small and frequent to facilitate code review.
+The token contract is a standard ERC‑20 with roles for minting and burning. In this project it is used as the
+staking asset for `PerpetualStaking` and as a convenient way to mint balances in tests.
 
-### Tasks
+---
 
-<details>
-<summary> 1. Install and configure Foundry </summary>
-&emsp; Requirements:
+## 4. What Was Provided vs. What Was Implemented
 
-- This project requires [Foundry development toolkit](https://github.com/foundry-rs/foundry). 
+This project did **not** start as a finished repository. The initial delivery contained:
 
-- Install and configure foundry dependencies as needed (i.e. <i>Foundry.toml and remmappings</i>)
-- Checkout foundry installation guide [Installation Guide](https://getfoundry.sh/introduction/installation/). 
+- A partially written `PerpetualStaking.sol`:
+  - State variables and comments describing the solvency model.
+  - Placeholder sections for events, modifiers, initialization, admin functions, user functions,
+    yield schedule management and private helpers.
+- A skeleton test file `PerpetualStaking.t.sol`:
+  - Empty test sections (SETUP, INITIALIZATION, DEPOSIT, CLAIM, COMPOUND, YIELD SCHEDULE, VIEW FUNCTIONS, ADMIN).
+- A short README describing the tasks and the requirement of at least 80% coverage.
 
-</details>
+Implemented work includes:
 
-<details>
-<summary> 2. Implement Perpetual Staking initial functions</summary>
+- All missing logic in `PerpetualStaking.sol`:
+  - Events and custom errors.
+  - Feature‑flag modifiers.
+  - Initialization & re‑initialization logic.
+  - Pause / unpause and token management admin functions.
+  - Yield schedule storage, validation and lookup functions.
+  - Deposit / compound / claim user flows.
+  - Solvency and view functions.
+  - `_cumulativeYield` integration logic over a piecewise schedule.
+- Complete Foundry test suite:
+  - Setup and initialization.
+  - Deposits (happy path + revert cases).
+  - Claims (with and without interest, paused, insufficient balance).
+  - Compounding (with and without additional deposits, revert cases).
+  - Yield schedule management (add/remove, invalid inputs, multiple schedules).
+  - View functions (withdrawable balances, total funds needed, current yield, net owed).
+  - Admin functions (pause/unpause, token removal, stake address migration).
+  - One extra test around the ERC‑20 token to exercise mint/transfer.
+- Coverage:
+  - The staking contract is covered well above the 80% requirement (both in lines and branches).
+  - Overall project coverage (staking + token) is also above 80%.
 
-- Add events.
-- Implement modifiers.
-- Implement [INITIALIZATION Section](./contracts/staking/PerpetualStaking.sol#L120)
+The end result is a **fully working staking system** that can be reused or extended in other projects.
 
-</details>
+---
 
-<details>
-<summary> 3. Implement Perpetual Staking Admin functions</summary>
+## 5. How to Run the Project
 
-- Implement [PAUSE/UNPAUSE Section](./contracts/staking/PerpetualStaking.sol#L157)
-- Implement [TOKEN MANAGEMENT Section](./contracts/staking/PerpetualStaking.sol#L191)
+### 5.1 Requirements
 
-</details>
+- Foundry installed (`forge` available in your shell).
+- A recent version of `git` and a standard Solidity toolchain.
 
-<details>
-<summary> 4. Implement Perpetual Staking yield management and userfunctions</summary>
+### 5.2 Install dependencies
 
-- Implement [PRIVATE Functions Section](./contracts/staking/PerpetualStaking.sol#L378)
-- Implement [YIELD SCHEDULE MANAGEMENT Section](./contracts/staking/PerpetualStaking.sol#L214)
-- Implement [DEPOSIT Section](./contracts/staking/PerpetualStaking.sol#L263)
-- Implement [COMPOUND Section](./contracts/staking/PerpetualStaking.sol#L283)
-- Implement [CLAIM Section](./contracts/staking/PerpetualStaking.sol#L313)
+If you cloned this repository from scratch and the `lib` folder is empty, run:
 
-</details>
+```bash
+forge install
+```
 
-<details>
-<summary> 5. Implement Perpetual Staking view functions</summary>
+or, to install the specific dependencies used here:
 
-- Implement [VIEW FUNCTIONS Section](./contracts/staking/PerpetualStaking.sol#L337)
+```bash
+forge install foundry-rs/forge-std
+forge install OpenZeppelin/openzeppelin-contracts-upgradeable
+forge install OpenZeppelin/openzeppelin-contracts
+```
 
-</details>
+### 5.3 Run tests
 
+```bash
+forge test
+```
 
-<details>
-<summary> 6. Implement Perpetual Staking unit tests with foundry</summary>
+This will compile the contracts and execute the full test suite in `test/staking/PerpetualStaking.t.sol`.
 
-&emsp;   Implement unit tests to ensure at least <b>80% coverage, adding more tests if needed. </b>
+### 5.4 Check coverage
 
-Modify the Perpetual Staking contract as you need. 
+```bash
+forge coverage
+```
 
-- Implement [SETUP Section](./test/staking/PerpetualStaking.t.sol#L30)
-- Implement [INITIALIZATION Section](./test/staking/PerpetualStaking.t.sol#L46)
-- Implement [DEPOSIT Section](./test/staking/PerpetualStaking.t.sol#L60)
-- Implement [CLAIM Section](./test/staking/PerpetualStaking.t.sol#L97)
-- Implement [COMPOUND Section](./test/staking/PerpetualStaking.t.sol#L147)
-- Implement [YIELD SCHEDULE Section](./test/staking/PerpetualStaking.t.sol#L178)
-- Implement [VIEW FUNCTIONS Section](./test/staking/PerpetualStaking.t.sol#L223)
-- Implement [ADMIN FUNCTIONS Section](./test/staking/PerpetualStaking.t.sol#L265)
+This command produces a line / branch / function coverage report per file and a global summary.  
+In this project the staking contract comfortably exceeds the requested **80% coverage**.
 
-</details>
+---
+
+## 6. Git Workflow Used
+
+Although this repository currently shows the final result on `main`, the implementation was developed using
+a **stacked-PR workflow** to simulate a real‑world review process:
+
+- One branch per task:
+  - `TASK-1-foundry-configuration`
+  - `TASK-2-initial-functions`
+  - `TASK-3-Admin-functions`
+  - `TASK-4-yield-management-and-user-functions`
+  - `TASK-5-view-functions`
+  - `TASK-6-unit-tests`
+- Each task was implemented on top of the previous one and opened as a pull request.
+- Tests were kept green at every step (`forge build`, `forge test`).
+
+This workflow demonstrates familiarity with:
+
+- Incremental development.
+- Keeping changesets focused and reviewable.
+- Letting CI (or `forge test`) validate each step.
+
+---
+
+## 7. About the Author
+
+This project was implemented by me: **Albert Khudaverdyan**
+
+Highlights:
+
+The goal of this repository is not only to solve a technical exercise, but to show:
+
+- Ability to work from an incomplete spec and finish it end‑to‑end.
+- Comfort with upgradeable contracts, events, custom errors, and time‑based yield logic.
+- Habit of backing features with tests and coverage, not just “happy path” demos.
+
+If you are a CTO, lead engineer or reviewer and would like more context about the design decisions,
+invariants or test strategy used here, feel free to reach out.
 
 
 
