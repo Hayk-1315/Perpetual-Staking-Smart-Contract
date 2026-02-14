@@ -274,45 +274,74 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @dev Must be called with strictly increasing `startTime` values
     /// @param yieldRatePerYear APY in 1e18 scale (e.g., 15% => 15e16)
     /// @param startTime UNIX timestamp strictly greater than now
-    function addYieldChange(
+        function addYieldChange(
         uint256 yieldRatePerYear,
         uint256 startTime
     ) external onlyOwner {
-        // TODO: Add yield rate to schedule
-        // HINTS:
-        // 1. Validate startTime >= block.timestamp (InvalidStartTime)
-        // 2. Calculate ratePerSecond = yieldRatePerYear / SECONDS_IN_A_YEAR
-        // 3. Get current schedule length
-        // 4. If length > 0, get last start time and verify startTime > lastStart (StartTimeMustIncrease)
-        // 5. Set in yieldSchedule map: yieldSchedule.set(startTime, ratePerSecond)
-        // 6. Emit YieldRateAdded event
+        // Validate that the start time is not in the past
+        if (startTime < block.timestamp) {
+            revert InvalidStartTime();
+        }
+
+        // Convert yearly yield to per-second yield
+        uint256 ratePerSecond = yieldRatePerYear / SECONDS_IN_A_YEAR;
+
+        // Enforce strictly increasing start times in the schedule
+        uint256 length = yieldSchedule.length();
+        if (length > 0) {
+            (uint256 lastStartTime, ) = yieldSchedule.at(length - 1);
+            if (startTime <= lastStartTime) {
+                revert StartTimeMustIncrease();
+            }
+        }
+
+        // Store the new yield rate in the schedule
+        yieldSchedule.set(startTime, ratePerSecond);
+
+        // Emit event using the yearly rate for easier off-chain readability
+        emit YieldRateAdded(yieldRatePerYear, startTime, block.timestamp);
     }
 
     /// @notice Remove a yield change at an exact `startTime`
     /// @param startTime Timestamp of yield change to remove
-    function removeYieldChange(uint256 startTime) external onlyOwner {
-        // TODO: Remove yield rate from schedule
-        // HINTS:
-        // 1. Call yieldSchedule.remove(startTime)
-        // 2. Emit YieldRateRemoved event
+       function removeYieldChange(uint256 startTime) external onlyOwner {
+        // Remove the yield change entry for the given start time
+        yieldSchedule.remove(startTime);
+
+        // Emit event so off-chain systems can track the removal
+        emit YieldRateRemoved(startTime, block.timestamp);
     }
+
 
     /// @notice Get current active yield rate and its start time
     /// @return currentYieldRate Current yield rate per second
     /// @return currentStartTime Start time of current yield rate
-    function getCurrentYieldRate()
+        function getCurrentYieldRate()
         public
         view
         returns (uint256 currentYieldRate, uint256 currentStartTime)
     {
-        // TODO: Find the latest active yield rate
-        // HINTS:
-        // 1. Initialize currentYieldRate to yieldPerSecond
-        // 2. Initialize currentStartTime to 0
-        // 3. Loop through yieldSchedule
-        // 4. For each entry, if timestamp > block.timestamp, break
-        // 5. Otherwise, update currentYieldRate and currentStartTime
-        // 6. Return the values
+        // Start with the base yield rate
+        currentYieldRate = yieldPerSecond;
+        currentStartTime = 0;
+
+        uint256 length = yieldSchedule.length();
+        for (uint256 i = 0; i < length; ) {
+            (uint256 startTime, uint256 ratePerSecond) = yieldSchedule.at(i);
+
+            // If this entry starts in the future, stop iterating
+            if (startTime > block.timestamp) {
+                break;
+            }
+
+            // Otherwise, this is the latest active rate so far
+            currentYieldRate = ratePerSecond;
+            currentStartTime = startTime;
+
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     // =====================================================================
@@ -323,16 +352,34 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @param user Address of user depositing
     /// @param amount Amount to deposit
     function deposit(address user, uint256 amount) external whenDepositable {
-        // TODO: Implement deposit logic
-        // HINTS:
-        // 1. Check user hasn't already deposited (AlreadyDeposited error)
-        // 2. Transfer amount from user to contract using safeTransferFrom
-        // 3. Get current timestamp as t0
-        // 4. Create UserStake struct with amount and t0
-        // 5. Update totalDeposited: totalDeposited += amount
-        // 6. Calculate C(t0) using _cumulativeYield(t0)
-        // 7. Update B: sumDepositsTimesCumulativeYield += amount * Ct0
-        // 8. Emit Deposited event
+        // Ensure the user does not already have an active stake
+        if (userStakes[user].amountDeposited > 0) {
+            revert AlreadyDeposited(user);
+        }
+
+        // Pull tokens from the user into this contract
+        BKNToken.safeTransferFrom(user, address(this), amount);
+
+        // Use current block time as the deposit timestamp
+        uint256 t0 = block.timestamp;
+
+        // Record the user's stake
+        userStakes[user] = UserStake({
+            amountDeposited: amount,
+            latestDepositTimestamp: t0
+        });
+
+        // Update total principal deposited (A)
+        totalDeposited += amount;
+
+        // Compute cumulative yield at deposit time C(t0)
+        uint256 Ct0 = _cumulativeYield(t0);
+
+        // Update B = Σ d_i * C(t0_i)
+        sumDepositsTimesCumulativeYield += amount * Ct0;
+
+        // Emit deposit event for off-chain tracking
+        emit Deposited(user, amount, t0);
     }
 
     // =====================================================================
@@ -346,23 +393,56 @@ contract PerpetualStaking is OwnableUpgradeable {
         address user,
         uint256 amount
     ) external whenCompoundable {
-        // TODO: Implement compound logic
-        // HINTS:
-        // 1. Get principal from userStakes[user].amountDeposited
-        // 2. If both principal and amount are 0, revert NotEnoughToDeposit
-        // 3. If amount > 0, check isDepositable and transfer amount from user
-        // 4. Calculate Cnow = _cumulativeYield(block.timestamp)
-        // 5. If principal > 0:
-        //    a. Get t0 from userStakes[user].latestDepositTimestamp
-        //    b. Calculate Ct0 = _cumulativeYield(t0)
-        //    c. Calculate interest = Math.mulDiv(principal, (Cnow - Ct0), ONE)
-        //    d. Update totalDeposited -= principal
-        //    e. Update B: sumDepositsTimesCumulativeYield -= principal * Ct0
-        // 6. Calculate newPrincipal = principal + interest + amount
-        // 7. Update userStakes with newPrincipal and block.timestamp
-        // 8. Update totalDeposited += newPrincipal
-        // 9. Update B: sumDepositsTimesCumulativeYield += newPrincipal * Cnow
-        // 10. Emit Compounded event
+        // Load current principal for the user
+        uint256 principal = userStakes[user].amountDeposited;
+
+        // If there is no existing stake and no additional amount, nothing to do
+        if (principal == 0 && amount == 0) {
+            revert NotEnoughToDeposit();
+        }
+
+        // If the user wants to add more principal, ensure deposits are allowed and pull tokens
+        if (amount > 0) {
+            if (!isDepositable) {
+                revert DepositsAreClosed();
+            }
+            BKNToken.safeTransferFrom(user, address(this), amount);
+        }
+
+        // Compute cumulative yield at current time
+        uint256 Cnow = _cumulativeYield(block.timestamp);
+
+        uint256 interest = 0;
+
+        if (principal > 0) {
+            // If there is an existing stake, close the old position first
+            uint256 t0 = userStakes[user].latestDepositTimestamp;
+            uint256 Ct0 = _cumulativeYield(t0);
+
+            // Simple interest on the existing principal between t0 and now
+            uint256 deltaC = Cnow - Ct0;
+            interest = Math.mulDiv(principal, deltaC, ONE);
+
+            // Remove the old principal from the global aggregates
+            totalDeposited -= principal;
+            sumDepositsTimesCumulativeYield -= principal * Ct0;
+        }
+
+        // New principal after compounding interest and adding extra amount
+        uint256 newPrincipal = principal + interest + amount;
+
+        // Update user stake with the new principal and current timestamp
+        userStakes[user] = UserStake({
+            amountDeposited: newPrincipal,
+            latestDepositTimestamp: block.timestamp
+        });
+
+        // Add the new principal to the global aggregates
+        totalDeposited += newPrincipal;
+        sumDepositsTimesCumulativeYield += newPrincipal * Cnow;
+
+        // Emit event for off-chain accounting
+        emit Compounded(user, newPrincipal, interest, block.timestamp);
     }
 
     // =====================================================================
@@ -372,21 +452,46 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @notice Claim full balance (principal + simple interest)
     /// @param user Address of user claiming
     function claim(address user) external whenClaimable {
-        // TODO: Implement claim logic
-        // HINTS:
-        // 1. Get principal from userStakes[user].amountDeposited
-        // 2. Check principal > 0 (NotEnoughToClaim error)
-        // 3. Get t0 from userStakes[user].latestDepositTimestamp
-        // 4. Calculate Cnow = _cumulativeYield(block.timestamp)
-        // 5. Calculate Ct0 = _cumulativeYield(t0)
-        // 6. Calculate interest = Math.mulDiv(principal, (Cnow - Ct0), ONE)
-        // 7. Calculate payout = principal + interest
-        // 8. Update A: totalDeposited -= principal
-        // 9. Update B: sumDepositsTimesCumulativeYield -= principal * Ct0
-        // 10. Delete userStakes[user]
-        // 11. Check contract has enough balance (ContractHasNotEnoughBalance error)
-        // 12. Transfer payout to user using safeTransfer
-        // 13. Emit Claimed event
+        // Load the user's principal
+        uint256 principal = userStakes[user].amountDeposited;
+
+        // User must have an active stake
+        if (principal == 0) {
+            revert NotEnoughToClaim();
+        }
+
+        // Load the original deposit timestamp
+        uint256 t0 = userStakes[user].latestDepositTimestamp;
+
+        // Compute cumulative yield at now and at deposit time
+        uint256 Cnow = _cumulativeYield(block.timestamp);
+        uint256 Ct0 = _cumulativeYield(t0);
+
+        // Simple interest earned between t0 and now
+        uint256 deltaC = Cnow - Ct0;
+        uint256 interest = Math.mulDiv(principal, deltaC, ONE);
+
+        // Total amount owed to the user
+        uint256 payout = principal + interest;
+
+        // Update global aggregates: remove the old principal position
+        totalDeposited -= principal;
+        sumDepositsTimesCumulativeYield -= principal * Ct0;
+
+        // Clear the user's stake
+        delete userStakes[user];
+
+        // Ensure the contract has enough tokens to pay the user
+        uint256 balance = BKNToken.balanceOf(address(this));
+        if (payout > balance) {
+            revert ContractHasNotEnoughBalance(payout, balance);
+        }
+
+        // Transfer principal + interest to the user
+        BKNToken.safeTransfer(user, payout);
+
+        // Emit event for off-chain tracking
+        emit Claimed(user, principal, interest, block.timestamp);
     }
 
     // =====================================================================
@@ -437,22 +542,43 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @dev Computes C(t) = ∫y(s)ds from s=0 to s=t, with piecewise y(s)
     /// @param targetTimestamp Target timestamp
     /// @return cumulativeYield Cumulative yield (1e18 * seconds)
-    function _cumulativeYield(
+        function _cumulativeYield(
         uint256 targetTimestamp
     ) private view returns (uint256 cumulativeYield) {
-        // TODO: Calculate cumulative yield at targetTimestamp
-        // HINTS:
-        // 1. Get schedule length n = yieldSchedule.length()
-        // 2. If n == 0, return yieldPerSecond * targetTimestamp
-        // 3. Initialize prevStart = 0, prevRate = yieldPerSecond, cumulativeYield = 0
-        // 4. Loop through schedule:
-        //    a. Get (startTime, rate) from yieldSchedule.at(i)
-        //    b. If targetTimestamp <= startTime:
-        //       - Add prevRate * (targetTimestamp - prevStart) to cumulativeYield
-        //       - Return cumulativeYield
-        //    c. Add prevRate * (startTime - prevStart) to cumulativeYield
-        //    d. Update prevStart = startTime, prevRate = rate
-        // 5. After loop, add prevRate * (targetTimestamp - prevStart) to cumulativeYield
-        // 6. Return cumulativeYield
+        uint256 n = yieldSchedule.length();
+
+        // If there is no schedule, use the base per-second yield for the whole period
+        if (n == 0) {
+            return yieldPerSecond * targetTimestamp;
+        }
+
+        uint256 prevStart = 0;
+        uint256 prevRate = yieldPerSecond;
+        cumulativeYield = 0;
+
+        for (uint256 i = 0; i < n; ) {
+            (uint256 startTime, uint256 ratePerSecond) = yieldSchedule.at(i);
+
+            // If the target time falls before this change, integrate up to target and return
+            if (targetTimestamp <= startTime) {
+                cumulativeYield += prevRate * (targetTimestamp - prevStart);
+                return cumulativeYield;
+            }
+
+            // Integrate from the previous start up to this change
+            cumulativeYield += prevRate * (startTime - prevStart);
+
+            // Move to the next interval
+            prevStart = startTime;
+            prevRate = ratePerSecond;
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        // After processing all changes, integrate from the last change to the target time
+        cumulativeYield += prevRate * (targetTimestamp - prevStart);
     }
+
 }
