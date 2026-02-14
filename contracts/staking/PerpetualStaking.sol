@@ -501,22 +501,39 @@ contract PerpetualStaking is OwnableUpgradeable {
     /// @notice Total liabilities if everyone withdrew now (S(t) = A + A*C(t) - B)
     /// @return Total funds needed to cover all stakes and interest
     function getTotalFundsNeeded() public view returns (uint256) {
-        // TODO: Calculate total liabilities
-        // HINTS:
-        // 1. Calculate Cnow = _cumulativeYield(block.timestamp)
-        // 2. Calculate Act = totalDeposited * Cnow
-        // 3. Return totalDeposited + Math.mulDiv(1, (Act - sumDepositsTimesCumulativeYield), ONE)
+        // Current cumulative yield C(t) at now
+        uint256 Cnow = _cumulativeYield(block.timestamp);
+
+        // A * C(t) with 1e18 scaling
+        uint256 Act = totalDeposited * Cnow;
+
+        // (A * C(t) - B) / 1e18 gives the total interest owed
+        uint256 interestPart = Math.mulDiv(
+            1,
+            (Act - sumDepositsTimesCumulativeYield),
+            ONE
+        );
+
+        // S(t) = A + interestPart
+        return totalDeposited + interestPart;
     }
 
     /// @notice Get net owed amount (liability - assets)
     /// @return Amount owed by contract, or 0 if solvent
     function getNetOwed() external view returns (uint256) {
-        // TODO: Calculate net owed
-        // HINTS:
-        // 1. Calculate currentLiabilities = getTotalFundsNeeded()
-        // 2. Get currentAssets = BKNToken.balanceOf(address(this))
-        // 3. If currentLiabilities > currentAssets, return difference
-        // 4. Otherwise return 0
+        // Total amount needed to cover all stakes and interest
+        uint256 currentLiabilities = getTotalFundsNeeded();
+
+        // Current token balance held by the contract
+        uint256 currentAssets = BKNToken.balanceOf(address(this));
+
+        // If liabilities exceed assets, return the shortfall
+        if (currentLiabilities > currentAssets) {
+            return currentLiabilities - currentAssets;
+        }
+
+        // Otherwise, the contract is solvent (or overfunded)
+        return 0;
     }
 
     /// @notice User withdrawable balance = principal + simple interest
@@ -525,14 +542,25 @@ contract PerpetualStaking is OwnableUpgradeable {
     function getWithdrawableUserBalance(
         address user
     ) public view returns (uint256) {
-        // TODO: Calculate user balance with interest
-        // HINTS:
-        // 1. Get principal from userStakes[user].amountDeposited
-        // 2. If principal == 0, return 0
-        // 3. Calculate Cnow = _cumulativeYield(block.timestamp)
-        // 4. Calculate Ct0 = _cumulativeYield(userStakes[user].latestDepositTimestamp)
-        // 5. Calculate interest = Math.mulDiv(principal, (Cnow - Ct0), ONE)
-        // 6. Return principal + interest
+        // Load the user's principal
+        uint256 principal = userStakes[user].amountDeposited;
+
+        // If no active stake, nothing to withdraw
+        if (principal == 0) {
+            return 0;
+        }
+
+        // Compute cumulative yield at now and at the user's last deposit
+        uint256 Cnow = _cumulativeYield(block.timestamp);
+        uint256 t0 = userStakes[user].latestDepositTimestamp;
+        uint256 Ct0 = _cumulativeYield(t0);
+
+        // Simple interest on the user's principal
+        uint256 deltaC = Cnow - Ct0;
+        uint256 interest = Math.mulDiv(principal, deltaC, ONE);
+
+        // Principal + interest
+        return principal + interest;
     }
 
     // =====================================================================
