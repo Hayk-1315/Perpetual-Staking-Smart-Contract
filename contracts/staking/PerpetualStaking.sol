@@ -205,32 +205,38 @@ contract PerpetualStaking is OwnableUpgradeable {
 
     /// @notice Pause deposits
     function pauseDeposit() external onlyOwner {
-        // TODO: Set isDepositable to false
+        // Disable new deposits
+        isDepositable = false;
     }
 
     /// @notice Unpause deposits
     function unpauseDeposit() external onlyOwner {
-        // TODO: Set isDepositable to true
+        // Enable new deposits
+        isDepositable = true;
     }
 
-    /// @notice Pause compound
+    /// @notice Pause compound operations
     function pauseCompound() external onlyOwner {
-        // TODO: Set isCompoundable to false
+        // Disable compound operations
+        isCompoundable = false;
     }
 
-    /// @notice Unpause compound
+    /// @notice Unpause compound operations
     function unpauseCompound() external onlyOwner {
-        // TODO: Set isCompoundable to true
+        // Enable compound operations
+        isCompoundable = true;
     }
 
     /// @notice Pause claims
     function pauseClaim() external onlyOwner {
-        // TODO: Set isClaimable to false
+        // Disable claim operations
+        isClaimable = false;
     }
 
     /// @notice Unpause claims
     function unpauseClaim() external onlyOwner {
-        // TODO: Set isClaimable to true
+        // Enable claim operations
+        isClaimable = true;
     }
 
     // =====================================================================
@@ -246,14 +252,18 @@ contract PerpetualStaking is OwnableUpgradeable {
         address to,
         uint256 amount
     ) external onlyOwner {
-        // TODO: Transfer tokens using safeTransfer
+        // Transfer arbitrary ERC20 tokens out of the staking contract
+        token.safeTransfer(to, amount);
     }
 
     /// @notice Change user stake ownership
     /// @param from Current owner address
     /// @param to New owner address
     function changeUserAddress(address from, address to) external onlyOwner {
-        // TODO: Copy stake from 'from' to 'to' and delete from 'from'
+        // Move the stake data from one address to another
+        UserStake memory stake = userStakes[from];
+        userStakes[to] = stake;
+        delete userStakes[from];
     }
 
     // =====================================================================
