@@ -33,66 +33,177 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function setUp() public {
-        // TODO: Deploy BKN token
-        // TODO: Deploy PerpetualStaking
-        // TODO: Initialize PerpetualStaking
-        // TODO: Deal BKN tokens to owner, staker1, staker2, staker3
-        // TODO: Transfer ownership if needed
-        // HINTS:
-        // 1. vm.prank(owner) for owner-only operations
-        // 2. Use deal() to allocate ERC20 tokens
-        // 3. Initialize with owner and BKN address
+        // Deploy BKN token
+        bkn = new Brickken();
+
+        // Deploy PerpetualStaking
+        perpetualStaking = new PerpetualStaking();
+
+        // Initialize staking with BKN token and owner address
+        perpetualStaking.initialize(address(bkn), owner);
+
+        // Allocate BKN balances to owner and stakers
+        deal(address(bkn), owner, OWNER_BKN_AMOUNT);
+        deal(address(bkn), staker1, STAKER1_BKN_AMOUNT);
+        deal(address(bkn), staker2, STAKER2_BKN_AMOUNT);
+        deal(address(bkn), staker3, STAKER3_BKN_AMOUNT);
+
+        // Optionally pre-fund the staking contract to cover interest payouts in tests
+        deal(address(bkn), address(perpetualStaking), OWNER_BKN_AMOUNT);
     }
+
+    function _assertYieldAt(
+        uint256 warpTo,
+        uint256 expectedRate,
+        uint256 expectedStart
+    ) internal {
+        vm.warp(warpTo);
+        (uint256 rate, uint256 start) = perpetualStaking.getCurrentYieldRate();
+        assertEq(rate, expectedRate);
+        assertEq(start, expectedStart);
+    }
+
+
 
     // =====================================================================
     // INITIALIZATION TESTS
     // =====================================================================
 
     function test_initialization() public {
-        // TODO: Test that contract initializes correctly
-        // HINTS:
-        // - Assert owner is set
-        // - Assert BKNToken address is correct
-        // - Assert yieldPerYear is 15e16
-        // - Assert isDepositable, isClaimable, isCompoundable are true
-        // - Assert yieldPerSecond = yieldPerYear / SECONDS_IN_A_YEAR
+        // Owner should be set correctly
+        assertEq(perpetualStaking.owner(), owner);
+
+        // BKN token address should match the deployed Brickken token
+        assertEq(address(perpetualStaking.BKNToken()), address(bkn));
+
+        // Yield per year should be set to the expected constant (15% in 1e18 scale)
+        assertEq(perpetualStaking.yieldPerYear(), YIELD_PER_YEAR);
+
+        // Flags should be enabled by default
+        assertTrue(perpetualStaking.isDepositable());
+        assertTrue(perpetualStaking.isClaimable());
+        assertTrue(perpetualStaking.isCompoundable());
+
+        // Yield per second should be derived from yield per year
+        uint256 expectedYieldPerSecond = YIELD_PER_YEAR / SECONDS_IN_A_YEAR;
+        assertEq(perpetualStaking.yieldPerSecond(), expectedYieldPerSecond);
     }
+
 
     // =====================================================================
     // DEPOSIT TESTS
     // =====================================================================
 
     function test_deposit() public {
-        // TODO: Test basic deposit
-        // HINTS:
-        // 1. Approve tokens for contract
-        // 2. Call deposit
-        // 3. Assert userStakes shows correct amount and timestamp
-        // 4. Assert user balance decreased
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Fix the current block timestamp for deterministic checks
+        vm.warp(1000);
+
+        // Approve tokens for the staking contract
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Record user balance before deposit
+        uint256 balanceBefore = bkn.balanceOf(staker1);
+
+        // Perform the deposit
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Check stored stake data
+        (uint256 deposited, uint256 ts) = perpetualStaking.userStakes(staker1);
+        assertEq(deposited, amount);
+        assertEq(ts, block.timestamp);
+
+        // Check user balance decreased by the deposited amount
+        uint256 balanceAfter = bkn.balanceOf(staker1);
+        assertEq(balanceAfter, balanceBefore - amount);
+
+        // Check global totalDeposited matches the deposited amount
+        assertEq(perpetualStaking.totalDeposited(), amount);
     }
+
 
     function test_deposit_revert_already_deposited() public {
-        // TODO: Test that second deposit reverts
-        // HINTS:
-        // - Deposit once
-        // - Try to deposit again
-        // - Use vm.expectRevert(abi.encodeWithSelector(...))
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve enough tokens for two attempts
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), STAKER1_BKN_AMOUNT);
+
+        // First deposit succeeds
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Second deposit should revert with AlreadyDeposited error
+        vm.prank(staker1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PerpetualStaking.AlreadyDeposited.selector,
+                staker1
+            )
+        );
+        perpetualStaking.deposit(staker1, amount);
     }
+
 
     function test_deposit_revert_when_paused() public {
-        // TODO: Test deposit reverts when paused
-        // HINTS:
-        // - Owner calls pauseDeposit()
-        // - Try to deposit
-        // - Expect DepositsAreClosed error
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Owner pauses deposits
+        vm.prank(owner);
+        perpetualStaking.pauseDeposit();
+
+        // Approve tokens for the staking contract
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit should revert with DepositsAreClosed error
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.DepositsAreClosed.selector);
+        perpetualStaking.deposit(staker1, amount);
     }
 
+
     function test_multiple_deposits_different_stakers() public {
-        // TODO: Test multiple stakers can deposit
-        // HINTS:
-        // - Deposit for staker1, staker2, staker3
-        // - Assert totalDeposited increases correctly
-        // - Assert each user's stake is tracked separately
+        // Amounts for each staker
+        uint256 amount1 = STAKER1_BKN_AMOUNT / 2;
+        uint256 amount2 = STAKER2_BKN_AMOUNT / 2;
+        uint256 amount3 = STAKER3_BKN_AMOUNT / 2;
+
+        // Approve tokens for each staker
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount1);
+
+        vm.prank(staker2);
+        bkn.approve(address(perpetualStaking), amount2);
+
+        vm.prank(staker3);
+        bkn.approve(address(perpetualStaking), amount3);
+
+        // Perform deposits
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount1);
+
+        vm.prank(staker2);
+        perpetualStaking.deposit(staker2, amount2);
+
+        vm.prank(staker3);
+        perpetualStaking.deposit(staker3, amount3);
+
+        // Check stakes for each staker
+        (uint256 dep1, ) = perpetualStaking.userStakes(staker1);
+        (uint256 dep2, ) = perpetualStaking.userStakes(staker2);
+        (uint256 dep3, ) = perpetualStaking.userStakes(staker3);
+
+        assertEq(dep1, amount1);
+        assertEq(dep2, amount2);
+        assertEq(dep3, amount3);
+
+        // Check global totalDeposited is the sum of all deposits
+        uint256 expectedTotal = amount1 + amount2 + amount3;
+        assertEq(perpetualStaking.totalDeposited(), expectedTotal);
     }
 
     // =====================================================================
@@ -100,47 +211,135 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_claim_principal_only() public {
-        // TODO: Test claiming immediately after deposit
-        // HINTS:
-        // 1. Deposit immediately
-        // 2. Claim immediately (no time passed, no interest)
-        // 3. Assert user receives principal back
-        // 4. Assert userStakes[user] is deleted
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Fix timestamp for deterministic behavior
+        vm.warp(1000);
+
+        // Approve tokens and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        uint256 balanceBefore = bkn.balanceOf(staker1);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Claim immediately (no time passed, no interest)
+        vm.prank(staker1);
+        perpetualStaking.claim(staker1);
+
+        // User should recover exactly the principal (net effect = -amount + amount)
+        uint256 balanceAfter = bkn.balanceOf(staker1);
+        assertEq(balanceAfter, balanceBefore);
+
+        // Stake should be cleared
+        (uint256 deposited, uint256 ts) = perpetualStaking.userStakes(staker1);
+        assertEq(deposited, 0);
+        assertEq(ts, 0);
+
+        // Global principal should be back to zero
+        assertEq(perpetualStaking.totalDeposited(), 0);
     }
 
     function test_claim_with_interest() public {
-        // TODO: Test claiming with accumulated interest
-        // HINTS:
-        // 1. Deposit
-        // 2. Warp forward (vm.warp) by SECONDS_IN_A_YEAR
-        // 3. Claim
-        // 4. Assert user receives principal + interest
-        // 5. Calculate expected interest and verify
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Start at a known timestamp
+        vm.warp(1000);
+
+        // Approve and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        uint256 balanceBefore = bkn.balanceOf(staker1);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move forward by one year
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Reproduce the same interest formula as the contract (constant rate case)
+        uint256 yieldPerSecond = perpetualStaking.yieldPerSecond();
+        uint256 deltaC = yieldPerSecond * SECONDS_IN_A_YEAR;
+        uint256 expectedInterest = (amount * deltaC) / 1e18;
+        uint256 expectedPayout = amount + expectedInterest;
+
+        // Claim funds
+        vm.prank(staker1);
+        perpetualStaking.claim(staker1);
+
+        uint256 balanceAfter = bkn.balanceOf(staker1);
+
+        // Net effect on user balance = -amount (deposit) + payout (principal + interest)
+        uint256 expectedFinalBalance = balanceBefore - amount + expectedPayout;
+        assertEq(balanceAfter, expectedFinalBalance);
+
+        // After claiming, stake and global principal should be cleared
+        (uint256 deposited, ) = perpetualStaking.userStakes(staker1);
+        assertEq(deposited, 0);
+        assertEq(perpetualStaking.totalDeposited(), 0);
     }
 
     function test_claim_revert_no_stake() public {
-        // TODO: Test claiming with no stake reverts
-        // HINTS:
-        // - Try to claim without depositing
-        // - Expect NotEnoughToClaim error
+        // User has no active stake
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.NotEnoughToClaim.selector);
+        perpetualStaking.claim(staker1);
     }
 
     function test_claim_revert_when_paused() public {
-        // TODO: Test claim reverts when paused
-        // HINTS:
-        // - Deposit
-        // - Owner calls pauseClaim()
-        // - Try to claim
-        // - Expect ClaimsAreClosed error
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve and deposit first
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Owner pauses claims
+        vm.prank(owner);
+        perpetualStaking.pauseClaim();
+
+        // Claim should revert with ClaimsAreClosed
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.ClaimsAreClosed.selector);
+        perpetualStaking.claim(staker1);
     }
 
     function test_claim_revert_insufficient_balance() public {
-        // TODO: Test claim reverts if contract has insufficient balance
-        // HINTS:
-        // 1. Deposit
-        // 2. Owner removes tokens via removeTokens()
-        // 3. Try to claim
-        // 4. Expect ContractHasNotEnoughBalance error
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+        
+        
+        // Fix timestamp for determinism
+        vm.warp(1000);
+
+        // Approve and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Owner empties the contract balance using removeTokens
+        IERC20Upgradeable token = IERC20Upgradeable(address(bkn));
+        uint256 contractBalance = bkn.balanceOf(address(perpetualStaking));
+
+        vm.prank(owner);
+        perpetualStaking.removeTokens(token, owner, contractBalance);
+
+        // Now the contract has 0 BKN; any claim should fail with ContractHasNotEnoughBalance(amount, 0)
+        vm.prank(staker1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PerpetualStaking.ContractHasNotEnoughBalance.selector,
+                amount,
+                0
+            )
+        );
+        perpetualStaking.claim(staker1);
     }
 
     // =====================================================================
@@ -148,30 +347,105 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_compound_no_additional_amount() public {
-        // TODO: Test compounding without additional deposit
-        // HINTS:
-        // 1. Deposit amount X
-        // 2. Warp forward by SECONDS_IN_A_YEAR / 2
-        // 3. Compound with amount = 0
-        // 4. Assert new principal = X + interest
-        // 5. Assert latestDepositTimestamp updated to now
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Fix timestamp for deterministic behavior
+        vm.warp(1000);
+
+        // Approve and deposit
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move forward by half a year
+        uint256 halfYear = SECONDS_IN_A_YEAR / 2;
+        vm.warp(block.timestamp + halfYear);
+
+        // Compute expected interest for half a year at current yieldPerSecond
+        uint256 yieldPerSecond = perpetualStaking.yieldPerSecond();
+        uint256 deltaC = yieldPerSecond * halfYear;
+        uint256 expectedInterest = (amount * deltaC) / 1e18;
+        uint256 expectedNewPrincipal = amount + expectedInterest;
+
+        // Compound without adding extra amount
+        vm.prank(staker1);
+        perpetualStaking.compoundAndDeposit(staker1, 0);
+
+        // Check new principal and timestamp
+        (uint256 newPrincipal, uint256 ts) = perpetualStaking.userStakes(
+            staker1
+        );
+        assertEq(newPrincipal, expectedNewPrincipal);
+        assertEq(ts, block.timestamp);
+
+        // Global principal should match the new principal
+        assertEq(perpetualStaking.totalDeposited(), expectedNewPrincipal);
     }
 
     function test_compound_with_additional_amount() public {
-        // TODO: Test compounding with additional deposit
-        // HINTS:
-        // 1. Deposit X
-        // 2. Warp forward by SECONDS_IN_A_YEAR / 2
-        // 3. Compound with additional amount Y
-        // 4. Assert new principal = X + interest + Y
+        uint256 initialAmount = STAKER1_BKN_AMOUNT / 4;
+        uint256 extraAmount = STAKER1_BKN_AMOUNT / 4;
+
+        // Fix timestamp for determinism
+        vm.warp(1000);
+
+        // Approve enough tokens for initial deposit and extra amount
+        vm.prank(staker1);
+        bkn.approve(
+            address(perpetualStaking),
+            initialAmount + extraAmount
+        );
+
+        // Initial deposit
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, initialAmount);
+
+        // Move forward by half a year
+        uint256 halfYear = SECONDS_IN_A_YEAR / 2;
+        vm.warp(block.timestamp + halfYear);
+
+        // Compute expected interest on the initial principal
+        uint256 yieldPerSecond = perpetualStaking.yieldPerSecond();
+        uint256 deltaC = yieldPerSecond * halfYear;
+        uint256 expectedInterest = (initialAmount * deltaC) / 1e18;
+        uint256 expectedNewPrincipal = initialAmount + expectedInterest + extraAmount;
+
+        // Compound and add extra amount
+        vm.prank(staker1);
+        perpetualStaking.compoundAndDeposit(staker1, extraAmount);
+
+        // Check new principal
+        (uint256 newPrincipal, ) = perpetualStaking.userStakes(staker1);
+        assertEq(newPrincipal, expectedNewPrincipal);
     }
 
     function test_compound_revert_no_stake_no_amount() public {
-        // TODO: Test compound reverts with no stake and no amount
+        // User has no stake and tries to compound with amount = 0
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.NotEnoughToDeposit.selector);
+        perpetualStaking.compoundAndDeposit(staker1, 0);
     }
 
     function test_compound_revert_when_paused() public {
-        // TODO: Test compound reverts when paused
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve and deposit first
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Owner pauses compound
+        vm.prank(owner);
+        perpetualStaking.pauseCompound();
+
+        // Any compound attempt should revert with CompoundIsClosed
+        vm.prank(staker1);
+        vm.expectRevert(PerpetualStaking.CompoundIsClosed.selector);
+        perpetualStaking.compoundAndDeposit(staker1, 0);
     }
 
     // =====================================================================
@@ -179,44 +453,122 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_add_yield_change() public {
-        // TODO: Test adding a yield change
-        // HINTS:
-        // 1. Owner calls addYieldChange with future timestamp and new rate
-        // 2. Assert getCurrentYieldRate still returns old rate
-        // 3. Warp to past the new timestamp
-        // 4. Assert getCurrentYieldRate returns new rate
+        // Initial rate should be the base yieldPerSecond
+        (uint256 baseRate, uint256 baseStart) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(baseRate, perpetualStaking.yieldPerSecond());
+        assertEq(baseStart, 0);
+
+        // Define a future start time and a new yearly rate (20%)
+        uint256 startTime = block.timestamp + 1000;
+        uint256 newYieldPerYear = 2e17; // 20%
+        uint256 expectedRatePerSecond = newYieldPerYear / SECONDS_IN_A_YEAR;
+
+        // Owner schedules the new yield rate
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(newYieldPerYear, startTime);
+
+        // Before the start time, the current rate should still be the base rate
+        vm.warp(startTime - 1);
+        (uint256 rateBefore, uint256 startBefore) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateBefore, perpetualStaking.yieldPerSecond());
+        assertEq(startBefore, 0);
+
+        // After the start time, the current rate should be the new rate
+        vm.warp(startTime + 1);
+        (uint256 rateAfter, uint256 startAfter) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateAfter, expectedRatePerSecond);
+        assertEq(startAfter, startTime);
     }
 
     function test_add_yield_change_revert_past_time() public {
-        // TODO: Test adding yield change with past timestamp reverts
-        // HINTS:
-        // - Call addYieldChange with past timestamp
-        // - Expect InvalidStartTime error
+         // Move time forward so we can define a "past" timestamp
+        vm.warp(1_000);
+
+        uint256 pastTime = block.timestamp - 1;
+        uint256 newYieldPerYear = 2e17; // 20%
+
+        vm.prank(owner);
+        vm.expectRevert(PerpetualStaking.InvalidStartTime.selector);
+        perpetualStaking.addYieldChange(newYieldPerYear, pastTime);
     }
 
     function test_add_yield_change_revert_not_increasing() public {
-        // TODO: Test adding non-increasing timestamps reverts
-        // HINTS:
-        // 1. Add yield change at time T
-        // 2. Try to add another at time T (or earlier)
-        // 3. Expect StartTimeMustIncrease error
+        vm.warp(1_000);
+
+        uint256 T1 = block.timestamp + 100;
+        uint256 T2 = T1; // not strictly greater, should revert
+        uint256 ratePerYear1 = 2e17; // 20%
+        uint256 ratePerYear2 = 25e16; // 25%
+
+        // First yield change at T1 is valid
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(ratePerYear1, T1);
+
+        // Second yield change with non-increasing timestamp should revert
+        vm.prank(owner);
+        vm.expectRevert(PerpetualStaking.StartTimeMustIncrease.selector);
+        perpetualStaking.addYieldChange(ratePerYear2, T2);
     }
 
     function test_remove_yield_change() public {
-        // TODO: Test removing a yield change
-        // HINTS:
-        // 1. Add yield change
-        // 2. Remove it
-        // 3. Assert it's no longer in schedule
+        vm.warp(1_000);
+
+        uint256 startTime = block.timestamp + 100;
+        uint256 newYieldPerYear = 2e17; // 20%
+        uint256 expectedRatePerSecond = newYieldPerYear / SECONDS_IN_A_YEAR;
+
+        // Add yield change
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(newYieldPerYear, startTime);
+
+        // After the start time, the new rate should be active
+        vm.warp(startTime + 1);
+        (uint256 rateAfterAdd, uint256 startAfterAdd) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateAfterAdd, expectedRatePerSecond);
+        assertEq(startAfterAdd, startTime);
+
+        // Remove the yield change
+        vm.prank(owner);
+        perpetualStaking.removeYieldChange(startTime);
+
+        // After removal, the contract should fall back to the base rate
+        vm.warp(startTime + 2);
+        (uint256 rateAfterRemove, uint256 startAfterRemove) = perpetualStaking
+            .getCurrentYieldRate();
+        assertEq(rateAfterRemove, perpetualStaking.yieldPerSecond());
+        assertEq(startAfterRemove, 0);
     }
 
     function test_multiple_yield_changes() public {
-        // TODO: Test multiple yield changes over time
-        // HINTS:
-        // 1. Add yield change at T1 (20%)
-        // 2. Add yield change at T2 (25%)
-        // 3. Add yield change at T3 (30%)
-        // 4. Warp to each time and verify getCurrentYieldRate returns correct value
+        vm.warp(1_000);
+
+        uint256 baseRate = perpetualStaking.yieldPerSecond();
+
+        uint256 T1 = block.timestamp + 100;
+        uint256 T2 = T1 + 100;
+        uint256 T3 = T2 + 100;
+
+        uint256 rateSec1 = (2e17) / SECONDS_IN_A_YEAR;   // 20%
+        uint256 rateSec2 = (25e16) / SECONDS_IN_A_YEAR;  // 25%
+        uint256 rateSec3 = (3e17) / SECONDS_IN_A_YEAR;   // 30%
+
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(2e17, T1);
+
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(25e16, T2);
+
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(3e17, T3);
+
+        _assertYieldAt(T1 - 1, baseRate, 0);
+        _assertYieldAt(T1 + 1, rateSec1, T1);
+        _assertYieldAt(T2 + 1, rateSec2, T2);
+        _assertYieldAt(T3 + 1, rateSec3, T3);
     }
 
     // =====================================================================
@@ -224,79 +576,321 @@ contract PerpetualStakingTest is Test {
     // =====================================================================
 
     function test_get_withdrawable_user_balance_no_time() public {
-        // TODO: Test getWithdrawableUserBalance immediately after deposit
-        // HINTS:
-        // - Deposit X
-        // - Assert balance = X (no interest yet)
+        // Use a simple deposit amount for the test
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract to spend staker1 tokens
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit tokens into the staking contract
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Immediately check withdrawable balance (should equal principal)
+        uint256 balance = perpetualStaking.getWithdrawableUserBalance(staker1);
+
+        // No time passed, so no interest should be accrued
+        assertEq(balance, amount);
     }
 
+
     function test_get_withdrawable_user_balance_with_time() public {
-        // TODO: Test getWithdrawableUserBalance after time passes
-        // HINTS:
-        // 1. Deposit X
-        // 2. Warp by 1 year
-        // 3. Assert balance > X (with interest)
+        // Use a simple deposit amount for the test
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract to spend staker1 tokens
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit tokens into the staking contract
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move time forward by one year to accumulate interest
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Check withdrawable balance after time has passed
+        uint256 balance = perpetualStaking.getWithdrawableUserBalance(staker1);
+
+        // With one year elapsed, balance should be greater than principal
+        assertTrue(balance > amount);
     }
 
     function test_get_total_funds_needed() public {
-        // TODO: Test getTotalFundsNeeded
-        // HINTS:
-        // 1. Deposit multiple users
-        // 2. Warp forward
-        // 3. Assert getTotalFundsNeeded >= totalDeposited
-        // 4. Verify calculation is correct
+        // Define deposit amounts for three different stakers
+        uint256 amount1 = STAKER1_BKN_AMOUNT / 2;
+        uint256 amount2 = STAKER2_BKN_AMOUNT / 2;
+        uint256 amount3 = STAKER3_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract for each staker
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount1);
+        vm.prank(staker2);
+        bkn.approve(address(perpetualStaking), amount2);
+        vm.prank(staker3);
+        bkn.approve(address(perpetualStaking), amount3);
+
+        // Deposit tokens for each staker
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount1);
+        vm.prank(staker2);
+        perpetualStaking.deposit(staker2, amount2);
+        vm.prank(staker3);
+        perpetualStaking.deposit(staker3, amount3);
+
+        // Move time forward by one year to accumulate interest
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Compute total liabilities if everyone withdrew now
+        uint256 totalNeeded = perpetualStaking.getTotalFundsNeeded();
+
+        // Sanity check: liabilities should be at least total principal
+        assertTrue(totalNeeded >= perpetualStaking.totalDeposited());
+
+        // Sum individual withdrawable balances
+        uint256 sumUsers =
+            perpetualStaking.getWithdrawableUserBalance(staker1) +
+            perpetualStaking.getWithdrawableUserBalance(staker2) +
+            perpetualStaking.getWithdrawableUserBalance(staker3);
+
+        // Allow tiny rounding differences between global and per-user calculations
+        assertApproxEqAbs(totalNeeded, sumUsers, 2);
     }
+
 
     function test_get_current_yield_rate() public {
-        // TODO: Test getCurrentYieldRate
-        // HINTS:
-        // 1. Initially should return yieldPerSecond
-        // 2. After adding yield change and warping, should return new rate
+        // Initially, the active yield rate should be the base yieldPerSecond
+        (uint256 rate0, uint256 start0) = perpetualStaking.getCurrentYieldRate();
+        assertEq(rate0, perpetualStaking.yieldPerSecond());
+        assertEq(start0, 0);
+
+        // Define a future yield change start time
+        uint256 startTime = block.timestamp + 1000;
+
+        // Define a new yearly yield rate (20%)
+        uint256 newYieldPerYear = 2e17;
+
+        // Convert yearly rate into per-second rate
+        uint256 expectedRatePerSecond = newYieldPerYear / SECONDS_IN_A_YEAR;
+
+        // Owner schedules the yield change
+        vm.prank(owner);
+        perpetualStaking.addYieldChange(newYieldPerYear, startTime);
+
+        // Warp to after the start time so the new rate becomes active
+        vm.warp(startTime + 1);
+
+        // Fetch the current active yield rate
+        (uint256 rate1, uint256 start1) = perpetualStaking.getCurrentYieldRate();
+
+        // Verify that the new rate is active and the start time matches
+        assertEq(rate1, expectedRatePerSecond);
+        assertEq(start1, startTime);
+                
     }
 
+
     function test_get_net_owed() public {
-        // TODO: Test getNetOwed
-        // HINTS:
-        // 1. If contract is solvent, should return 0
-        // 2. If liabilities > assets, should return difference
+        // Use a simple deposit amount for the test
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp for stable assertions
+        vm.warp(1000);
+
+        // Approve the staking contract to spend staker1 tokens
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        // Deposit tokens into the staking contract
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Move time forward by one year to accumulate interest
+        vm.warp(block.timestamp + SECONDS_IN_A_YEAR);
+
+        // Compute current liabilities
+        uint256 liabilities = perpetualStaking.getTotalFundsNeeded();
+
+        // Ensure the contract has enough assets to be solvent
+        deal(address(bkn), address(perpetualStaking), liabilities + 1);
+
+        // If solvent, net owed should be zero
+        uint256 netOwedSolvent = perpetualStaking.getNetOwed();
+        assertEq(netOwedSolvent, 0);
+
+        // Now force insolvency by removing all assets
+        deal(address(bkn), address(perpetualStaking), 0);
+
+        // If insolvent, net owed should equal liabilities
+        uint256 netOwedInsolvent = perpetualStaking.getNetOwed();
+        assertEq(netOwedInsolvent, liabilities);
     }
+
 
     // =====================================================================
     // ADMIN FUNCTIONS TESTS
     // =====================================================================
 
     function test_pause_unpause_deposit() public {
-        // TODO: Test pause/unpause deposit
-        // HINTS:
-        // - Assert isDepositable starts true
-        // - Call pauseDeposit()
-        // - Assert isDepositable is false
-        // - Call unpauseDeposit()
-        // - Assert isDepositable is true
+        // Deposits should be enabled by default
+        assertTrue(perpetualStaking.isDepositable());
+
+        // Owner pauses deposits
+        vm.prank(owner);
+        perpetualStaking.pauseDeposit();
+
+        // Deposits should now be disabled
+        assertFalse(perpetualStaking.isDepositable());
+
+        // Owner unpauses deposits
+        vm.prank(owner);
+        perpetualStaking.unpauseDeposit();
+
+        // Deposits should be enabled again
+        assertTrue(perpetualStaking.isDepositable());
     }
 
     function test_pause_unpause_claim() public {
-        // TODO: Test pause/unpause claim
+        // Claims should be enabled by default
+        assertTrue(perpetualStaking.isClaimable());
+
+        // Owner pauses claims
+        vm.prank(owner);
+        perpetualStaking.pauseClaim();
+
+        // Claims should now be disabled
+        assertFalse(perpetualStaking.isClaimable());
+
+        // Owner unpauses claims
+        vm.prank(owner);
+        perpetualStaking.unpauseClaim();
+
+        // Claims should be enabled again
+        assertTrue(perpetualStaking.isClaimable());
     }
 
     function test_pause_unpause_compound() public {
-        // TODO: Test pause/unpause compound
+        // Compounding should be enabled by default
+        assertTrue(perpetualStaking.isCompoundable());
+
+        // Owner pauses compounding
+        vm.prank(owner);
+        perpetualStaking.pauseCompound();
+
+        // Compounding should now be disabled
+        assertFalse(perpetualStaking.isCompoundable());
+
+        // Owner unpauses compounding
+        vm.prank(owner);
+        perpetualStaking.unpauseCompound();
+
+        // Compounding should be enabled again
+        assertTrue(perpetualStaking.isCompoundable());
     }
 
     function test_remove_tokens() public {
-        // TODO: Test removeTokens
-        // HINTS:
-        // 1. Deposit to get tokens in contract
-        // 2. Owner calls removeTokens
-        // 3. Assert tokens were transferred
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Approve and deposit to move tokens into the staking contract
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Prepare token interface for removeTokens
+        IERC20Upgradeable token = IERC20Upgradeable(address(bkn));
+
+        // Record balances before removal
+        uint256 ownerBefore = bkn.balanceOf(owner);
+        uint256 contractBefore = bkn.balanceOf(address(perpetualStaking));
+
+        // Owner removes tokens from the staking contract
+        vm.prank(owner);
+        perpetualStaking.removeTokens(token, owner, amount);
+
+        // Check balances after removal
+        uint256 ownerAfter = bkn.balanceOf(owner);
+        uint256 contractAfter = bkn.balanceOf(address(perpetualStaking));
+
+        // Owner should receive the removed amount
+        assertEq(ownerAfter, ownerBefore + amount);
+
+        // Contract balance should decrease by the removed amount
+        assertEq(contractAfter, contractBefore - amount);
     }
 
     function test_change_user_address() public {
-        // TODO: Test changeUserAddress
-        // HINTS:
-        // 1. Deposit as staker1
-        // 2. Owner calls changeUserAddress(staker1, staker2)
-        // 3. Assert userStakes[staker1] is empty
-        // 4. Assert userStakes[staker2] has the stake
+        uint256 amount = STAKER1_BKN_AMOUNT / 2;
+
+        // Set a deterministic timestamp
+        vm.warp(1000);
+
+        // Approve and deposit for staker1
+        vm.prank(staker1);
+        bkn.approve(address(perpetualStaking), amount);
+
+        vm.prank(staker1);
+        perpetualStaking.deposit(staker1, amount);
+
+        // Confirm stake exists for staker1
+        (uint256 depBefore, uint256 tsBefore) = perpetualStaking.userStakes(staker1);
+        assertEq(depBefore, amount);
+        assertEq(tsBefore, block.timestamp);
+
+        // Owner changes stake ownership from staker1 to staker2
+        vm.prank(owner);
+        perpetualStaking.changeUserAddress(staker1, staker2);
+
+        // staker1 stake should be cleared
+        (uint256 dep1After, uint256 ts1After) = perpetualStaking.userStakes(staker1);
+        assertEq(dep1After, 0);
+        assertEq(ts1After, 0);
+
+        // staker2 should now own the stake
+        (uint256 dep2After, uint256 ts2After) = perpetualStaking.userStakes(staker2);
+        assertEq(dep2After, amount);
+        assertEq(ts2After, tsBefore);
     }
+
+    function test_brickken_mint_and_transfer_basic() public {
+        // Use fresh addresses to avoid balances preloaded in setUp()
+        address newUser = makeAddr("NEW_USER");
+        address receiver = makeAddr("RECEIVER");
+
+        uint256 mintAmount = 100 ether;
+        uint256 transferAmount = 40 ether;
+
+        // Choose a valid minter (depends on who deployed the token in setUp)
+        address minter = owner;
+        if (!bkn.hasRole(bkn.MINTER_ROLE(), minter)) {
+            minter = address(this);
+        }
+
+        // Mint tokens to a fresh user
+        vm.prank(minter);
+        bkn.mint(newUser, mintAmount);
+
+        // Check balance after mint
+        assertEq(bkn.balanceOf(newUser), mintAmount);
+
+        // Transfer part of the tokens to another fresh address
+        vm.prank(newUser);
+        bkn.transfer(receiver, transferAmount);
+
+        // Check balances after transfer
+        assertEq(bkn.balanceOf(newUser), mintAmount - transferAmount);
+        assertEq(bkn.balanceOf(receiver), transferAmount);
+   }
+
 }
